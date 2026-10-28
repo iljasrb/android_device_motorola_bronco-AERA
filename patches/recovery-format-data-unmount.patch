@@ -1,5 +1,5 @@
 diff --git a/aeraui/platform/aera_backend.cpp b/aeraui/platform/aera_backend.cpp
-index 7176b32f..7daa441d 100644
+index 7176b32f..cfa72cc0 100644
 --- a/aeraui/platform/aera_backend.cpp
 +++ b/aeraui/platform/aera_backend.cpp
 @@ -55,7 +55,9 @@
@@ -12,7 +12,7 @@ index 7176b32f..7daa441d 100644
  
  #include "data.hpp"
  #include "aera_flash_log.hpp"
-@@ -2006,8 +2031,59 @@ static int RecoveryRunJobImpl(const JobRequest &request) {
+@@ -2006,8 +2034,59 @@ static int RecoveryRunJobImpl(const JobRequest &request) {
        property_set("sys.usb.config", "none");
        usleep(300000);
      }
@@ -50,24 +50,24 @@ index 7176b32f..7daa441d 100644
 +    }
 +    if (PartitionManager.Is_Mounted_By_Path("/data")) umount2("/data", MNT_DETACH);
 +
-+    // Metadata encryption maps /data through a dm-default-key/dm-crypt device
-+    // whose key slot holds the partition, so mkfs.f2fs cannot take it
-+    // exclusively ("Error: In use by the system!") and TWRP's Wipe_Encryption
-+    // no longer drops the mapping (delete_crypto_blk_dev() is commented out).
-+    // Try to remove the mapping first; if a holder keeps it alive, erase the
-+    // filesystem headers instead - the data is gone immediately and the ROM
-+    // formats the empty partition on its next boot (same model as fastboot -w).
++    // Metadata encryption keeps userdata mapped through dm-default-key, and the
++    // kernel holds that mapping open, so mkfs.f2fs cannot take the partition
++    // exclusively ("Error: In use by the system!") and the mapping cannot be
++    // removed. Format_Data() therefore only succeeds when the map is already
++    // gone; otherwise the format is marked pending and recovery restarts and
++    // formats userdata before the crypto chain maps it again.
 +    TWFunc::Exec_Cmd("dmsetup remove userdata");
      TWFunc::SetPerformanceMode(true);
 -    const int result = PartitionManager.Format_Data() ? 0 : 1;
 +    int result = PartitionManager.Format_Data() ? 0 : 1;
 +    if (result != 0) {
-+      std::string target = "/dev/block/mapper/userdata";
-+      if (access(target.c_str(), F_OK) != 0) target = "/dev/block/by-name/userdata";
-+      LOGINFO("AERA format: crypto mapping still held, wiping %s\n", target.c_str());
-+      if (TWFunc::Exec_Cmd("dd if=/dev/zero of=" + target + " bs=1048576 count=32") == 0) {
++      LOGINFO("AERA format: crypto mapping still held, deferring to restart\n");
++      if (TWFunc::Exec_Cmd("/system/bin/aera-format-pending.sh mark") == 0) {
 +        result = 0;
-+        gui_msg(Msg("aera_format_wiped=Data wiped; reboot so the ROM can create the new filesystem."));
++        TWFunc::SetPerformanceMode(false);
++        gui_msg(Msg("aera_format_restart=Formatting data, recovery will restart."));
++        property_set("sys.powerctl", "reboot,recovery");
++        return 0;
 +      }
 +    }
      PartitionManager.Update_System_Details();

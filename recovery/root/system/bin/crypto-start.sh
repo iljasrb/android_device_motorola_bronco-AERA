@@ -16,6 +16,16 @@
 LOG=/tmp/crypto-start.log
 : > "$LOG"
 
+# A Format Data request from the previous session is applied here, before this
+# chain creates the dm-default-key mapping that makes userdata unformattable.
+if /system/bin/aera-format-pending.sh take; then
+    # /data is a plain f2fs now and /metadata is blank: nothing to decrypt, so
+    # skip the whole crypto chain and let recovery mount userdata directly.
+    echo "crypto-start: formatted userdata, continuing without crypto" > /dev/kmsg
+    setprop aera.data.formatted 1
+    exit 0
+fi
+
 log() {
     echo "crypto-start: $*" >> "$LOG"
     echo "crypto-start: $*" > /dev/kmsg 2>/dev/null

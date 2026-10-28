@@ -15,3 +15,6 @@ backup/
 
 # Local helper scripts for TEE blob extraction and sideload tests
 scripts/dev/
+
+# Local device/test captures
+logs/
