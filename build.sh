@@ -93,13 +93,17 @@ grep -q 'ReleaseVendorMountsForInstall' "$recovery_mod/aeraui/platform/aera_back
 
 # make_f2fs leaves userdata checkpoint-disabled, so every write made in a
 # recovery session was rolled back on the next boot (settings, backups).
-grep -q 'checkpoint=enable' "$recovery_mod/aeraui/platform/aera_backend.cpp" ||
+grep -q 'checkpoint=enable' "$recovery_mod/partition.cpp" ||
     git -C "$recovery_mod" apply "$root_dir/patches/recovery-userdata-checkpoint.patch"
 
 # The UI autosaves during startup, before /data is necessarily mounted; without
 # a load-first guard those session defaults overwrite the stored preferences.
 grep -q 'gPreferencesLoaded' "$recovery_mod/aeraui/platform/aera_backend.cpp" ||
     git -C "$recovery_mod" apply "$root_dir/patches/aeraui-preferences-persistence.patch"
+
+# Fades call Set_Brightness per frame; throttle its logging.
+grep -q 'last_logged' "$recovery_mod/twrp-functions.cpp" ||
+    git -C "$recovery_mod" apply "$root_dir/patches/recovery-brightness-log-throttle.patch"
 
 # Point the in-recovery update check at our own catalog instead of
 # aera-recovery.com.

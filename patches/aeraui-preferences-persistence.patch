@@ -1,8 +1,8 @@
 diff --git a/aeraui/platform/aera_backend.cpp b/aeraui/platform/aera_backend.cpp
-index 7176b32f..83c2d64a 100644
+index 7176b32f..98a8cebc 100644
 --- a/aeraui/platform/aera_backend.cpp
 +++ b/aeraui/platform/aera_backend.cpp
-@@ -147,6 +152,9 @@ std::string SessionLanguageOr(const std::string &stored) {
+@@ -147,6 +149,9 @@ std::string SessionLanguageOr(const std::string &stored) {
  }
  bool WriteFileAtomically(const std::string &path, const std::string &contents);
  kernel::Settings gDeveloperSettings;
@@ -12,7 +12,7 @@ index 7176b32f..83c2d64a 100644
  bool SaveAeraPreferences(bool require_early = false);
  bool ResetAeraSettings(bool theme);
  bool ResetAeraThemeSection(ThemeSection section);
-@@ -3568,11 +3671,17 @@ void LoadAeraPreferencesIfAvailable() {
+@@ -3568,11 +3664,17 @@ void LoadAeraPreferencesIfAvailable() {
        !shared_repair_started.exchange(true)) {
      std::thread([] { aera::shared_storage::NormalizeAll(); }).detach();
    }
@@ -32,7 +32,7 @@ index 7176b32f..83c2d64a 100644
  
    EarlyUiPreferences full_ui = gEarlyDefaults;
    std::string line;
-@@ -3631,11 +3740,18 @@ void LoadAeraPreferencesIfAvailable() {
+@@ -3631,11 +3733,18 @@ void LoadAeraPreferencesIfAvailable() {
    ApplyEarlyUiSideEffects();
    if (!SaveEarlyUiPreferences()) LOGERR("AERA: could not refresh the early UI preference cache.\n");
    if (!SaveEarlyWifiPreferences()) LOGERR("AERA: could not refresh the early WLAN cache.\n");

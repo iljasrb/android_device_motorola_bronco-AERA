@@ -1,8 +1,8 @@
 diff --git a/aeraui/platform/aera_backend.cpp b/aeraui/platform/aera_backend.cpp
-index 7176b32f..83c2d64a 100644
+index 7176b32f..98a8cebc 100644
 --- a/aeraui/platform/aera_backend.cpp
 +++ b/aeraui/platform/aera_backend.cpp
-@@ -1198,12 +1206,37 @@ bool RecoveryCancelSideload() {
+@@ -1198,12 +1203,37 @@ bool RecoveryCancelSideload() {
    return CancelAdbSideload();
  }
  
@@ -40,7 +40,7 @@ index 7176b32f..83c2d64a 100644
    Device::BuiltinAction reboot_action = Device::REBOOT_BOOTLOADER;
    const int result = twrp_sideload(
        "/", &reboot_action, [](uint64_t received, uint64_t total) {
-@@ -1245,6 +1278,7 @@ int RecoveryRunJob(const JobRequest &request) {
+@@ -1245,6 +1275,7 @@ int RecoveryRunJob(const JobRequest &request) {
      gui_err("Finish or cancel background plugin storage tasks first.\n");
      return 1;
    }

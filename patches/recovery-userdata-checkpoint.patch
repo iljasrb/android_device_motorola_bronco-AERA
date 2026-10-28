@@ -1,41 +1,95 @@
-diff --git a/aeraui/platform/aera_backend.cpp b/aeraui/platform/aera_backend.cpp
-index 7176b32f..83c2d64a 100644
---- a/aeraui/platform/aera_backend.cpp
-+++ b/aeraui/platform/aera_backend.cpp
-@@ -128,6 +130,9 @@ extern "C" int aeraui_decrypt_data(const char *credential, int user_id) {
-   }
-   PartitionManager.Decrypt_Adopted();
-   PartitionManager.Update_System_Details();
-+  // make_f2fs leaves userdata checkpoint-disabled; while that flag is set every
-+  // write made in recovery is rolled back on the next boot.
-+  TWFunc::Exec_Cmd("mount -o remount,checkpoint=enable /data 2>/dev/null");
-   return 0;
+diff --git a/aeraui/core/runner.cpp b/aeraui/core/runner.cpp
+index 04582358..a4a11077 100644
+--- a/aeraui/core/runner.cpp
++++ b/aeraui/core/runner.cpp
+@@ -4,6 +4,7 @@
+  */
+ 
+ #include "aeraui/runner.hpp"
++#include "twrp-functions.hpp"
+ #include "../../aera_shared_storage.hpp"
+ #include "operation_affinity.hpp"
+ 
+@@ -16,6 +17,7 @@
+ #include <unistd.h>
+ 
+ #include <algorithm>
++#include <chrono>
+ #include <atomic>
+ #include <condition_variable>
+ #include <cstdlib>
+@@ -23,6 +25,7 @@
+ #include <string>
+ #include <thread>
+ 
++#include <android-base/properties.h>
+ #include <android/log.h>
+ #include <minuitwrp/minui.h>
+ 
+@@ -583,7 +586,17 @@ RunResult RunLoop(bool fastboot_mode = false,
+                     __android_log_print(ANDROID_LOG_INFO, kLogTag,
+                                         "live fastbootd mode active");
+                 } else {
+-                    engine.SetFastbootMode(false);
++                    // The live hand-off cannot unmount /vendor once recovery
++                    // itself has mapped vendor libraries, so on those boots the
++                    // only reliable entry is the BCB path used by Lineage
++                    // recovery. Ask init directly: it writes boot-fastboot and
++                    // reboots, and does not need this LVGL/EGL context to be
++                    // torn down (which aborted after a failed hand-off).
++                    gModeTransitionBusy.store(false, std::memory_order_release);
++                    __android_log_print(ANDROID_LOG_WARN, kLogTag,
++                                        "live fastbootd failed; rebooting to cold fastbootd");
++                    android::base::SetProperty("sys.powerctl", "reboot,fastboot");
++                    while (true) sleep(1);
+                 }
+                 gModeTransitionBusy.store(false, std::memory_order_release);
+                 continue;
+@@ -740,6 +753,21 @@ DecryptionResult RunAeraUiDecryption(int credential_type,
  }
  
-@@ -2018,9 +2103,13 @@ static int RecoveryRunJobImpl(const JobRequest &request) {
-     const auto found = std::find_if(mounts.begin(), mounts.end(),
-         [&](const Volume &volume) { return volume.path == request.path; });
-     if (found == mounts.end()) return 1;
--    return (request.job == Job::kMount
-+    const bool mounted = request.job == Job::kMount
-         ? PartitionManager.Mount_By_Path(request.path, true)
--        : PartitionManager.UnMount_By_Path(request.path, true)) ? 0 : 1;
-+        : PartitionManager.UnMount_By_Path(request.path, true);
-+    // A checkpoint-disabled userdata drops recovery writes on the next boot.
-+    if (mounted && request.job == Job::kMount && request.path == "/data")
-+      TWFunc::Exec_Cmd("mount -o remount,checkpoint=enable /data 2>/dev/null");
-+    return mounted ? 0 : 1;
-   }
-   if (request.partitions.empty()) return 1;
-   std::vector<Volume> allowed = request.job == Job::kRestore
-@@ -3550,6 +3649,10 @@ void LoadEarlyUiPreferencesIfAvailable() {
- }
+ RunResult RunAeraUi(const DisplayMetrics& metrics) {
++    // One-shot, off the UI thread: a checkpoint-disabled userdata rolls back to
++    // an old checkpoint, losing recovery's own writes (settings, backups).
++    // Waits for the storage mount, then remounts with checkpoints enabled.
++    std::thread([] {
++        for (int attempt = 0; attempt < 40; ++attempt) {
++            std::this_thread::sleep_for(std::chrono::milliseconds(500));
++            std::string mounts;
++            if (TWFunc::read_file("/proc/mounts", mounts) != 0) continue;
++            if (mounts.find(" /data f2fs ") == std::string::npos) continue;
++            if (mounts.find("checkpoint=disable") == std::string::npos) break;
++            TWFunc::Exec_Cmd("mount -o remount,checkpoint=enable /data");
++            break;
++        }
++    }).detach();
++
+     std::thread early_thread;
+     bool run_inline = false;
+     {
+diff --git a/partition.cpp b/partition.cpp
+index 332ead03..f4d805b0 100644
+--- a/partition.cpp
++++ b/partition.cpp
+@@ -1798,6 +1798,21 @@ bool TWPartition::Mount(bool Display_Error) {
+ 	}
  
- void LoadAeraPreferencesIfAvailable() {
-+  // A checkpoint-disabled userdata mounts an old checkpoint, so recovery sees
-+  // stale content and drops its own writes at the next boot. This runs on every
-+  // startup path, whichever component mounted /data first.
-+  TWFunc::Exec_Cmd("mount -o remount,checkpoint=enable /data 2>/dev/null");
-   // Fastboot over Wi-Fi grants destructive partition access and is therefore
-   // intentionally session-only. Remember paired computers, but require an
-   // explicit opt-in after every recovery process start.
+ exit:
++	// make_f2fs leaves userdata checkpoint-disabled; while that flag is set the
++	// kernel rolls back to an old checkpoint, so recovery shows stale content and
++	// loses its own writes on the next boot. Mount() is polled, and a remount is
++	// a full f2fs mount, so try once per process and only while it is disabled.
++	if (Mount_Point == "/data" && Current_File_System == "f2fs") {
++		static bool checkpoint_checked = false;
++		if (!checkpoint_checked) {
++			std::string mounts;
++			if (TWFunc::read_file("/proc/mounts", mounts) == 0) {
++				checkpoint_checked = true;
++				if (mounts.find("checkpoint=disable") != std::string::npos)
++					TWFunc::Exec_Cmd("mount -o remount,checkpoint=enable /data");
++			}
++		}
++	}
+ 	if (Removable)
+ 		Update_Size(Display_Error);
+ 
