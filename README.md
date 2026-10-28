@@ -6,8 +6,8 @@ Device tree for [AERA Recovery](https://github.com/AERA-Recovery) `aera-16.0`
 - Device: `bronco` (`bronco_g` in Android), codename `aera_bronco`
 - Recovery: TWRP-based AERA UI, ramdisk-only image (header v4, 100 MiB, `kernel_size=0`)
 - Maintainer: [@iljasrb](https://github.com/iljasrb)
-- Downloads: <https://rom.flac.moe/bronco/recovery/AERA/latest/>
-- Update feed: <https://rom.flac.moe/bronco/recovery/AERA/catalog.json> (in-recovery updater)
+- Downloads: <https://rom.flac.moe/bronco/recovery/aera/latest/>
+- Update feed: <https://rom.flac.moe/bronco/recovery/aera/catalog.json> (in-recovery updater)
 
 ## Features
 

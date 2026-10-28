@@ -5,7 +5,7 @@
 #   scripts/publish.sh --dry-run     # default: print, change nothing
 #   scripts/publish.sh --yes         # upload, latest/ replaced, previous in archive/
 #
-# Publishes the newest out/AERA-bronco-#*.img and .zip plus catalog.json, the
+# Publishes the newest out/AERA-bronco-*.img and .zip plus catalog.json, the
 # feed the in-recovery updater reads (schema 1).
 #   scripts/publish.sh --yes --purge # drop older builds
 #
@@ -16,7 +16,7 @@
 # Target comes from .env.publish (gitignored) or the environment:
 #   PUBLISH_HOST  ssh alias/host                                    (required)
 #   PUBLISH_ROOT  directory served below the base url               (required)
-#   PUBLISH_URL   public base url (default https://rom.flac.moe/bronco/recovery/AERA)
+#   PUBLISH_URL   public base url (default https://rom.flac.moe/bronco/recovery/aera)
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=$root/out
@@ -28,7 +28,7 @@ if [ -f "$root/.env.publish" ]; then
 fi
 host=${PUBLISH_HOST:?publish: set PUBLISH_HOST (see .env.publish)}
 site=${PUBLISH_ROOT:?publish: set PUBLISH_ROOT (see .env.publish)}
-baseurl=${PUBLISH_URL:-https://rom.flac.moe/bronco/recovery/AERA}
+baseurl=${PUBLISH_URL:-https://rom.flac.moe/bronco/recovery/aera}
 stage=$site/_staging
 
 dry=1 purge=0
@@ -41,17 +41,28 @@ for a in "$@"; do
     esac
 done
 
+# The ROM feed owns the site root (latest/, archive/). Refuse to publish there.
+case $site in
+    */recovery/aera) ;;
+    *) echo "publish: PUBLISH_ROOT must end in /recovery/aera (got $site)" >&2; exit 2 ;;
+esac
+if [ "$dry" = 0 ] &&
+   ssh "$host" "bash -lc \"ls $site/latest/Project_Infinity-* 2>/dev/null\"" | grep -q .; then
+    echo "publish: $site/latest holds ROM builds, refusing to replace it" >&2
+    exit 2
+fi
+
 run() { if [ "$dry" = 1 ]; then printf '  would: %s\n' "$*"; else "$@"; fi; }
 rsh() { if [ "$dry" = 1 ]; then printf '  would: ssh %s bash -lc %s\n' "$host" "$*";
         else ssh "$host" "bash -lc \"$*\""; fi; }
 
-img=$(ls -t "$out"/AERA-bronco-#*.img 2>/dev/null | head -1)
-zip=$(ls -t "$out"/AERA-bronco-#*.zip 2>/dev/null | head -1)
-[ -n "$img" ] || { echo "no AERA-bronco-#*.img in $out" >&2; exit 1; }
-[ -n "$zip" ] || { echo "no AERA-bronco-#*.zip in $out (the updater installs the zip)" >&2; exit 1; }
+img=$(ls -t "$out"/AERA-bronco-*.img 2>/dev/null | head -1)
+zip=$(ls -t "$out"/AERA-bronco-*.zip 2>/dev/null | head -1)
+[ -n "$img" ] || { echo "no AERA-bronco-*.img in $out" >&2; exit 1; }
+[ -n "$zip" ] || { echo "no AERA-bronco-*.zip in $out (the updater installs the zip)" >&2; exit 1; }
 img_name=$(basename "$img")
 zip_name=$(basename "$zip")
-build=${img_name#AERA-bronco-}; build=${build%%-*}; build=${build#\#}
+build=${img_name#AERA-bronco-}; build=${build%%-*}
 
 # The updater installs the referenced package as a zip and compares build_time
 # with the value the installed image reports.

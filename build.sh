@@ -93,12 +93,18 @@ grep -q 'ReleaseVendorMountsForInstall' "$recovery_mod/aeraui/platform/aera_back
 
 # Point the in-recovery update check at our own catalog instead of
 # aera-recovery.com.
-grep -q 'rom.flac.moe/bronco/recovery/AERA' "$recovery_mod/aeraui/features/update/update_manager.cpp" ||
+grep -q 'rom.flac.moe/bronco/recovery/aera' "$recovery_mod/aeraui/features/update/update_manager.cpp" ||
     git -C "$recovery_mod" apply "$root_dir/patches/aeraui-update-catalog-url.patch"
 
 # Format Data needs the crypto consumers stopped before mkfs.f2fs.
 grep -q 'keystore2 -> /data/misc/keystore' "$recovery_mod/aeraui/platform/aera_backend.cpp" ||
     git -C "$recovery_mod" apply "$root_dir/patches/recovery-format-data-unmount.patch"
+
+# The installer zip's debug vars dump would otherwise list the builder's
+# absolute tree path.
+vendor_recovery="$aera_dir/vendor/recovery"
+grep -q "/AERA_DIR/d" "$vendor_recovery/AERA_A16.sh" ||
+    git -C "$vendor_recovery" apply "$root_dir/patches/recovery-build-vars-redact.patch"
 
 cd "$aera_dir"
 

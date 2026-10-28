@@ -1,0 +1,12 @@
+diff --git a/AERA_A16.sh b/AERA_A16.sh
+index 08c8a5b..481de01 100755
+--- a/AERA_A16.sh
++++ b/AERA_A16.sh
+@@ -526,6 +526,7 @@ local F=$1
+    export | grep "AERA_" > $F
+    export | grep "OF_" >> $F
+    sed -i '/AERA_BUILD_LOG_FILE/d' $F
++   sed -i '/AERA_DIR/d' $F
+    sed -i '/AERA_BUILD_DEVICE/d' $F
+    sed -i '/AERA_LOCAL_CALLBACK_SCRIPT/d' $F
+    sed -i '/AERA_MANIFEST_ROOT/d' $F
