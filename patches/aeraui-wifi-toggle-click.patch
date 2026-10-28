@@ -1,0 +1,12 @@
+--- a/aeraui/scenes/wifi_scene.cpp
++++ b/aeraui/scenes/wifi_scene.cpp
+@@ -1125,6 +1125,9 @@
+   state->radio_switch = lv_switch_create(state->scene.toggle);
+   StyleSwitch(state->radio_switch, false);
+   lv_obj_align(state->radio_switch, LV_ALIGN_RIGHT_MID, -22, 0);
++  /* The switch is only an indicator: let the parent card receive the click so
++   * tapping the knob toggles Wi-Fi just like tapping the rest of the card. */
++  lv_obj_remove_flag(state->radio_switch, LV_OBJ_FLAG_CLICKABLE);
+   OnClick(state->scene.toggle, [state] {
+     WifiRequest request;
+     request.operation = state->snapshot.enabled ? WifiOperation::kDisable : WifiOperation::kEnable;

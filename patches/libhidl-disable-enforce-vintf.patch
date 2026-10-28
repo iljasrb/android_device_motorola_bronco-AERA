@@ -1,0 +1,17 @@
+diff --git a/Android.bp b/Android.bp
+index 8f4e1f7..449ee58 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -210,7 +210,11 @@ cc_defaults {
+             cflags: ["-DLIBHIDL_TARGET_DEBUGGABLE"],
+         },
+         enforce_vintf_manifest: {
+-            cflags: ["-DENFORCE_VINTF_MANIFEST"],
++            // Recovery has a running hwservicemanager but libhidl still resolves
++            // HIDL services to passthrough (getTransport != HWBINDER), so this
++            // check rejects every registration; the gatekeeper passthrough HAL
++            // then cannot be reached and credential decryption fails.
++            // cflags: ["-DENFORCE_VINTF_MANIFEST"],
+         },
+     },
+ 

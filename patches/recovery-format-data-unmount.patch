@@ -1,0 +1,75 @@
+diff --git a/aeraui/platform/aera_backend.cpp b/aeraui/platform/aera_backend.cpp
+index 7176b32f..7daa441d 100644
+--- a/aeraui/platform/aera_backend.cpp
++++ b/aeraui/platform/aera_backend.cpp
+@@ -55,7 +55,9 @@
+ 
+ #include <cutils/properties.h>
+ #include <private/android_filesystem_config.h>
++#include <android-base/file.h>
+ #include <android-base/properties.h>
++#include <android-base/strings.h>
+ 
+ #include "data.hpp"
+ #include "aera_flash_log.hpp"
+@@ -2006,8 +2031,59 @@ static int RecoveryRunJobImpl(const JobRequest &request) {
+       property_set("sys.usb.config", "none");
+       usleep(300000);
+     }
++    // The crypto consumers chdir into /data (gatekeeperd ->
++    // /data/misc/gatekeeper, keystore2 -> /data/misc/keystore) and keep it busy,
++    // so Format_Data cannot replace the filesystem ("Error: In use by the
++    // system!" from mkfs.f2fs). Stop them and detach /data first.
++    for (const char *service : {"gatekeeperd", "keystore2"}) {
++      if (android::base::GetProperty(std::string("init.svc.") + service, "") ==
++          "running") {
++        property_set("ctl.stop", service);
++      }
++    }
++    // TWRP's Format_Data unmaps every dynamic partition first and aborts with
++    // "Unable to unmap dynamic partitions" while any dm-backed mount is busy
++    // (recovery itself maps /vendor libraries). Detach those mounts lazily: the
++    // holders keep their inodes, but the mount no longer blocks the unmap.
++    {
++      std::string mounts;
++      if (android::base::ReadFileToString("/proc/mounts", &mounts)) {
++        for (const auto &line : android::base::Split(mounts, "\n")) {
++          const auto fields = android::base::Split(line, " ");
++          if (fields.size() < 2) continue;
++          if (fields[0].compare(0, 15, "/dev/block/dm-") != 0) continue;
++          if (fields[1] == "/data") continue;
++          if (umount2(fields[1].c_str(), MNT_DETACH) == 0)
++            LOGINFO("AERA format: detached dynamic mount %s\n", fields[1].c_str());
++        }
++      }
++    }
++    for (int attempt = 0; attempt < 25; ++attempt) {
++      if (!PartitionManager.Is_Mounted_By_Path("/data")) break;
++      PartitionManager.UnMount_By_Path("/data", true);
++      usleep(200000);
++    }
++    if (PartitionManager.Is_Mounted_By_Path("/data")) umount2("/data", MNT_DETACH);
++
++    // Metadata encryption maps /data through a dm-default-key/dm-crypt device
++    // whose key slot holds the partition, so mkfs.f2fs cannot take it
++    // exclusively ("Error: In use by the system!") and TWRP's Wipe_Encryption
++    // no longer drops the mapping (delete_crypto_blk_dev() is commented out).
++    // Try to remove the mapping first; if a holder keeps it alive, erase the
++    // filesystem headers instead - the data is gone immediately and the ROM
++    // formats the empty partition on its next boot (same model as fastboot -w).
++    TWFunc::Exec_Cmd("dmsetup remove userdata");
+     TWFunc::SetPerformanceMode(true);
+-    const int result = PartitionManager.Format_Data() ? 0 : 1;
++    int result = PartitionManager.Format_Data() ? 0 : 1;
++    if (result != 0) {
++      std::string target = "/dev/block/mapper/userdata";
++      if (access(target.c_str(), F_OK) != 0) target = "/dev/block/by-name/userdata";
++      LOGINFO("AERA format: crypto mapping still held, wiping %s\n", target.c_str());
++      if (TWFunc::Exec_Cmd("dd if=/dev/zero of=" + target + " bs=1048576 count=32") == 0) {
++        result = 0;
++        gui_msg(Msg("aera_format_wiped=Data wiped; reboot so the ROM can create the new filesystem."));
++      }
++    }
+     PartitionManager.Update_System_Details();
+     TWFunc::SetPerformanceMode(false);
+     if (restore_fastboot) property_set("sys.usb.config", "fastboot");

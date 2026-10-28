@@ -1,0 +1,50 @@
+diff --git a/aeraui/platform/aera_backend.cpp b/aeraui/platform/aera_backend.cpp
+index 7176b32f..7daa441d 100644
+--- a/aeraui/platform/aera_backend.cpp
++++ b/aeraui/platform/aera_backend.cpp
+@@ -1198,12 +1197,37 @@ bool RecoveryCancelSideload() {
+   return CancelAdbSideload();
+ }
+ 
++// TWRP's zip installer aborts with "Failed to unmount Vendor" when it cannot
++// detach /vendor, and recovery's own early services (qseecomd, SPU/gatekeeper
++// HALs, ssgtzd) pin it for the whole boot once they have mapped vendor
++// libraries. release-mounts.sh detaches the mount (lazily when pinned, so the
++// running services keep their mappings) and publishes aera.mounts.released.
++// Every install entry point must run this first, or a zip install - including
++// an ADB sideload - fails before the package is even opened.
++void ReleaseVendorMountsForInstall() {
++  property_set("aera.release.mounts", "0");
++  usleep(20000);
++  property_set("aera.release.mounts", "1");
++  for (int attempt = 0; attempt < 50; ++attempt) {
++    if (android::base::GetBoolProperty("aera.mounts.released", false)) return;
++    usleep(20000);
++  }
++  LOGERR("AERA install: /vendor release timed out; install may fail\n");
++  // release-mounts detaches /vendor lazily when the mapping is pinned. TWRP's
++  // installer still tries a plain umount from its cached mount state and then
++  // aborts with "Failed to unmount Vendor" (EBUSY), so skip its own step: the
++  // installers that need /vendor mount it themselves through the fstab entry.
++  DataManager::SetValue(TW_UNMOUNT_VENDOR, 0);
++  DataManager::SetValue(TW_UNMOUNT_SYSTEM, 0);
++}
++
+ int RecoveryRunSideload() {
+   if (!gSideloadActive.load(std::memory_order_acquire) &&
+       !RecoveryPrepareSideload()) return 1;
+ 
+   const bool mtp_was_enabled = TWFunc::Toggle_MTP(false);
+   TWFunc::SetPerformanceMode(true);
++  ReleaseVendorMountsForInstall();
+   Device::BuiltinAction reboot_action = Device::REBOOT_BOOTLOADER;
+   const int result = twrp_sideload(
+       "/", &reboot_action, [](uint64_t received, uint64_t total) {
+@@ -1245,6 +1269,7 @@ int RecoveryRunJob(const JobRequest &request) {
+     gui_err("Finish or cancel background plugin storage tasks first.\n");
+     return 1;
+   }
++  if (request.job == Job::kInstall) ReleaseVendorMountsForInstall();
+   const char *method = request.job == Job::kInstall ? "ZIP installation" :
+       request.job == Job::kSideload ? "ADB sideload" :
+       request.job == Job::kFlashPayload ? "Advanced payload flash" :

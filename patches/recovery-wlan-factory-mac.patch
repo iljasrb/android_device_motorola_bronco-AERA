@@ -1,0 +1,117 @@
+diff --git a/wlan.cpp b/wlan.cpp
+index a248132f..82cf0fe6 100644
+--- a/wlan.cpp
++++ b/wlan.cpp
+@@ -1154,39 +1154,84 @@ bool Wlan::StartSupplicant() {
+ }
+ 
+ bool Wlan::PrepareStableMacFirmware() {
+-    char serial_prop[PROPERTY_VALUE_MAX] = {0};
+-    property_get("ro.serialno", serial_prop, "");
+-    std::string serial = serial_prop;
+-    if (serial.empty()) {
+-        property_get("ro.boot.serialno", serial_prop, "");
+-        serial = serial_prop;
+-    }
+-
+-    if (serial.empty()) {
+-        LOGERR("WLAN: cannot derive stable MAC: device serial is empty\n");
+-        return false;
+-    }
++    unsigned char mac[6] = {};
++    bool have_mac = false;
+ 
+     /*
+-     * Qualcomm CNSS normally obtains the factory WLAN MAC from DMS. Recovery
+-     * does not run that vendor service, so the driver falls back to a
+-     * different default MAC on every boot. Derive a deterministic,
+-     * recovery-only address from the device serial instead. FNV-1a is enough
+-     * here because this is a stable identifier, not a cryptographic secret.
+-     * AERA uses its own namespace so the address remains stable across AERA
+-     * builds without sharing identity material with another recovery.
++     * The bootloader passes the factory WLAN addresses in the kernel command
++     * line (wifimacaddr=aa:bb:cc:dd:ee:ff[,..]). Use the first one so recovery
++     * presents the same address as Android.
+      */
+-    uint64_t hash = UINT64_C(1469598103934665603);
+-    const std::string material = "AERA-WLAN-v1:" + serial;
+-    for (unsigned char c : material) {
+-        hash ^= c;
+-        hash *= UINT64_C(1099511628211);
++    std::string cmdline;
++    if (ReadFile("/proc/cmdline", cmdline)) {
++        const std::string key = "wifimacaddr=";
++        const size_t key_pos = cmdline.find(key);
++        if (key_pos != std::string::npos) {
++            const size_t begin = key_pos + key.size();
++            const size_t end = cmdline.find_first_of(" \t\r\n", begin);
++            std::string value = cmdline.substr(
++                begin, end == std::string::npos ? std::string::npos : end - begin);
++            value = value.substr(0, value.find(','));
++            std::string hex;
++            for (char c : value) {
++                if (c != ':')
++                    hex.push_back(c);
++            }
++            if (hex.size() == 12) {
++                bool valid = true;
++                for (int i = 0; i < 6 && valid; ++i) {
++                    const int high = HexDigitValue(hex[i * 2]);
++                    const int low = HexDigitValue(hex[i * 2 + 1]);
++                    if (high < 0 || low < 0) {
++                        valid = false;
++                    } else {
++                        mac[i] = static_cast<unsigned char>((high << 4) | low);
++                    }
++                }
++                // Reject multicast/broadcast and the all-zero placeholder.
++                if (valid && !(mac[0] & 0x01)) {
++                    bool all_zero = true;
++                    for (unsigned char byte : mac)
++                        all_zero = all_zero && byte == 0;
++                    have_mac = !all_zero;
++                }
++            }
++        }
+     }
+ 
+-    unsigned char mac[6];
+-    mac[0] = 0x02;  // Locally administered, unicast.
+-    for (int i = 1; i < 6; ++i)
+-        mac[i] = static_cast<unsigned char>(hash >> ((i - 1) * 8));
++    if (!have_mac) {
++        char serial_prop[PROPERTY_VALUE_MAX] = {0};
++        property_get("ro.serialno", serial_prop, "");
++        std::string serial = serial_prop;
++        if (serial.empty()) {
++            property_get("ro.boot.serialno", serial_prop, "");
++            serial = serial_prop;
++        }
++
++        if (serial.empty()) {
++            LOGERR("WLAN: cannot derive stable MAC: no factory address or device serial\n");
++            return false;
++        }
++
++        /*
++         * Qualcomm CNSS normally obtains the factory WLAN MAC from DMS. If the
++         * bootloader did not provide one, derive a deterministic recovery-only
++         * address from the device serial. FNV-1a is enough here because this is
++         * a stable identifier, not a cryptographic secret. AERA uses its own
++         * namespace so the address remains stable across AERA builds without
++         * sharing identity material with another recovery.
++         */
++        uint64_t hash = UINT64_C(1469598103934665603);
++        const std::string material = "AERA-WLAN-v1:" + serial;
++        for (unsigned char c : material) {
++            hash ^= c;
++            hash *= UINT64_C(1099511628211);
++        }
++
++        mac[0] = 0x02;  // Locally administered, unicast.
++        for (int i = 1; i < 6; ++i)
++            mac[i] = static_cast<unsigned char>(hash >> ((i - 1) * 8));
++    }
+ 
+     std::ostringstream compact_address;
+     compact_address << std::uppercase << std::hex << std::setfill('0');

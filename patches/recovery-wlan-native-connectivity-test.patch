@@ -1,0 +1,177 @@
+--- a/wlan.cpp
++++ b/wlan.cpp
+@@ -8,10 +8,16 @@
+ #include <cstdio>
+ #include <cstring>
+ #include <dirent.h>
++#include <fcntl.h>
+ #include <fstream>
++#include <netdb.h>
++#include <netinet/in.h>
++#include <poll.h>
++#include <resolv.h>
+ #include <set>
+ #include <sstream>
+ #include <string>
++#include <sys/socket.h>
+ #include <sys/stat.h>
+ #include <sys/types.h>
+ #include <unistd.h>
+@@ -74,6 +80,113 @@
+  * wrapper (mondrian_wlan_up.sh); it is now native init builtins. */
+ static const char* WLAN_SUPP_PREP_PROP = "sys.aera.wlan.up";
+ 
++// Recovery has no netd/resolver service, so DHCP only publishes DNS servers as
++// Android properties. Tools (and the connection test below) use libc's
++// getaddrinfo(), which reads /etc/resolv.conf. Keep that file in sync whenever
++// a WLAN link is up, including links configured outside the TWRP UI.
++static bool EnsureResolverFile(const std::string& iface) {
++    std::vector<std::string> servers;
++    const std::string prefix = "net." + iface + ".dns";
++    for (int index = 1; index <= 4; ++index) {
++        char value[PROPERTY_VALUE_MAX] = {};
++        property_get((prefix + std::to_string(index)).c_str(), value, "");
++        in_addr address4 {};
++        in6_addr address6 {};
++        if (inet_pton(AF_INET, value, &address4) != 1 &&
++            inet_pton(AF_INET6, value, &address6) != 1)
++            continue;
++        bool duplicate = false;
++        for (const auto& server : servers)
++            duplicate = duplicate || server == value;
++        if (!duplicate) servers.emplace_back(value);
++    }
++    for (const char* fallback : {"1.1.1.1", "8.8.8.8"}) {
++        bool duplicate = false;
++        for (const auto& server : servers)
++            duplicate = duplicate || server == fallback;
++        if (!duplicate) servers.emplace_back(fallback);
++    }
++
++    std::ostringstream resolver;
++    for (const auto& server : servers)
++        resolver << "nameserver " << server << "\n";
++    const std::string desired = resolver.str();
++
++    std::ifstream current_file("/system/etc/resolv.conf");
++    std::string current((std::istreambuf_iterator<char>(current_file)),
++                        std::istreambuf_iterator<char>());
++    if (current == desired) return true;
++
++    std::ofstream output("/system/etc/resolv.conf", std::ios::trunc);
++    if (!output) return false;
++    output << desired;
++    return output.good();
++}
++
++// Probe a TCP endpoint without depending on busybox/ping. Android recovery's
++// ping is frequently unavailable (or blocked by ping_group_range), and the
++// previous connection test reported a false failure when busybox was missing.
++static bool ProbeTcp(const char* host, const char* service, std::string* detail) {
++    struct addrinfo hints {};
++    hints.ai_family = AF_UNSPEC;
++    hints.ai_socktype = SOCK_STREAM;
++    struct addrinfo* addresses = nullptr;
++    const int lookup = getaddrinfo(host, service, &hints, &addresses);
++    if (lookup != 0) {
++        if (detail) *detail = gai_strerror(lookup);
++        return false;
++    }
++
++    bool connected = false;
++    for (struct addrinfo* address = addresses; address != nullptr && !connected;
++         address = address->ai_next) {
++        const int fd = socket(address->ai_family,
++                              address->ai_socktype | SOCK_CLOEXEC,
++                              address->ai_protocol);
++        if (fd < 0) continue;
++        const int flags = fcntl(fd, F_GETFL, 0);
++        if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
++        int result = connect(fd, address->ai_addr, address->ai_addrlen);
++        if (result == 0) {
++            connected = true;
++        } else if (errno == EINPROGRESS) {
++            struct pollfd wait {fd, POLLOUT, 0};
++            result = poll(&wait, 1, 4000);
++            if (result > 0) {
++                int error = 0;
++                socklen_t length = sizeof(error);
++                if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0 &&
++                    error == 0)
++                    connected = true;
++                else if (detail)
++                    *detail = std::strerror(error ? error : errno);
++            } else if (detail) {
++                *detail = result == 0 ? "timeout" : std::strerror(errno);
++            }
++        } else if (detail) {
++            *detail = std::strerror(errno);
++        }
++        close(fd);
++    }
++    freeaddrinfo(addresses);
++    return connected;
++}
++
++static bool ResolveHostname(const char* host, std::string* detail) {
++    res_init();
++    struct addrinfo hints {};
++    hints.ai_family = AF_UNSPEC;
++    hints.ai_socktype = SOCK_STREAM;
++    struct addrinfo* addresses = nullptr;
++    const int result = getaddrinfo(host, "443", &hints, &addresses);
++    if (result != 0) {
++        if (detail) *detail = gai_strerror(result);
++        return false;
++    }
++    freeaddrinfo(addresses);
++    return true;
++}
++
+ static int HexDigitValue(char value) {
+     if (value >= '0' && value <= '9') return value - '0';
+     if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+@@ -966,6 +1079,12 @@
+         DataManager::SetValue("wlan_connected_name", ssid);
+         DataManager::SetValue("wlan_info_text", "Connected: " + ssid + "  IP: " + ip_addr);
+ 
++        // DHCP is not guaranteed to run in this process (a link can be
++        // established by a boot script or an earlier recovery session). Make
++        // sure libc name resolution matches the live lease.
++        if (!EnsureResolverFile(iface))
++            gui_print("WLAN: could not install /system/etc/resolv.conf\n");
++
+         return true;
+     }
+ 
+@@ -1011,18 +1130,20 @@
+         return true;
+     }
+ 
+-    std::string busybox = GetBusyboxBinary();
+-    if (busybox.empty())
+-        busybox = "busybox";
+-
+-    std::string internet_output;
+-    bool internet_ok = RunCommand(busybox + " ping -c 1 -w 4 1.1.1.1 2>&1", internet_output);
++    std::string internet_detail;
++    const bool internet_ok = ProbeTcp("1.1.1.1", "443", &internet_detail);
+ 
+-    std::string dns_output;
+-    bool dns_ok = RunCommand(busybox + " ping -c 1 -w 4 bing.com 2>&1", dns_output);
++    std::string dns_detail;
++    const bool dns_ok = ResolveHostname("bing.com", &dns_detail);
+ 
+-    LOGINFO("WLAN test internet output:\n%s\n", internet_output.c_str());
+-    LOGINFO("WLAN test DNS output:\n%s\n", dns_output.c_str());
++    LOGINFO("WLAN test internet (1.1.1.1:443): %s%s%s\n",
++            internet_ok ? "OK" : "FAILED",
++            internet_detail.empty() ? "" : " - ",
++            internet_detail.c_str());
++    LOGINFO("WLAN test DNS (bing.com): %s%s%s\n",
++            dns_ok ? "OK" : "FAILED",
++            dns_detail.empty() ? "" : " - ",
++            dns_detail.c_str());
+ 
+     if (internet_ok && dns_ok) {
+         SetWlanTestResult(

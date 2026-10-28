@@ -1,0 +1,63 @@
+diff --git a/twrpinstall/adb_install.cpp b/twrpinstall/adb_install.cpp
+index 94798dbb..23cba3bf 100755
+--- a/twrpinstall/adb_install.cpp
++++ b/twrpinstall/adb_install.cpp
+@@ -141,6 +141,33 @@ static bool WriteStatusToFd(MinadbdCommandStatus status, int fd) {
+   return true;
+ }
+ 
++static bool StageSideloadPackage(const char* source, const char* destination) {
++  android::base::unique_fd in(open(source, O_RDONLY | O_CLOEXEC));
++  if (in < 0) {
++    PLOG(ERROR) << "Could not open the sideload package";
++    return false;
++  }
++  android::base::unique_fd out(
++      open(destination, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600));
++  if (out < 0) {
++    PLOG(ERROR) << "Could not create the staged sideload package";
++    return false;
++  }
++  std::vector<char> buffer(65536);
++  ssize_t count;
++  while ((count = TEMP_FAILURE_RETRY(read(in.get(), buffer.data(), buffer.size()))) > 0) {
++    if (!android::base::WriteFully(out.get(), buffer.data(), count)) {
++      PLOG(ERROR) << "Could not write the staged sideload package";
++      return false;
++    }
++  }
++  if (count < 0) {
++    PLOG(ERROR) << "Could not read the sideload package";
++    return false;
++  }
++  return true;
++}
++
+ // Installs the package from FUSE. Returns the installation result and whether it should continue
+ // waiting for new commands.
+ static auto AdbInstallPackageHandler(int* result) {
+@@ -163,9 +190,23 @@ static auto AdbInstallPackageHandler(int* result) {
+         break;
+       }
+     }
++    // The package is served through FUSE from the host. The zip installer and
++    // update-binaries that shell out to unzip need real random access; reading
++    // through the fuse channel aborts part-way (observed at ~48% of a 47 MB
++    // installer, host sees "adb: failed to read command"). Stream the package
++    // into tmpfs once and install from there.
++    std::string package_path = FUSE_SIDELOAD_HOST_PATHNAME;
++    constexpr const char* kLocalPackage = "/tmp/sideload_package.zip";
++    if (StageSideloadPackage(FUSE_SIDELOAD_HOST_PATHNAME, kLocalPackage)) {
++      package_path = kLocalPackage;
++      LOG(INFO) << "Sideload package staged at " << kLocalPackage;
++    } else {
++      LOG(ERROR) << "Could not stage the sideload package; installing from FUSE";
++    }
+     int dummy = 0;
+-    *result = TWinstall_zip(FUSE_SIDELOAD_HOST_PATHNAME, &dummy);
++    *result = TWinstall_zip(package_path.c_str(), &dummy);
+     Fox_Post_Zip_Install(*result);
++    if (package_path == kLocalPackage) unlink(kLocalPackage);
+     break;
+   }
+ 
