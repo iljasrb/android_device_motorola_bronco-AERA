@@ -1,0 +1,19 @@
+# Recovery override of AOSP's android.hardware.boot-service.default_recovery.rc.
+#
+# The module installs the same service definition with
+# seclabel u:r:hal_bootctl_default:s0, a domain that does not exist in the
+# recovery sepolicy. Recovery runs every vendor/system helper in u:r:recovery:s0,
+# so override the rc with the same service name and path.
+#
+# fastbootd (and TWRP's slot switching) resolve
+# android.hardware.boot.IBootControl/default through libboot_control_client.
+# Because the VINTF fragment installed next to this file declares the AIDL
+# instance, WaitForService() blocks until this process registers instead of
+# falling back to the vendor HIDL bootctl. Keep the service running for the
+# whole recovery session.
+service vendor.boot-default /system/bin/hw/android.hardware.boot-service.default_recovery
+    class early_hal
+    user root
+    group root
+    seclabel u:r:recovery:s0
+    interface aidl android.hardware.boot.IBootControl/default

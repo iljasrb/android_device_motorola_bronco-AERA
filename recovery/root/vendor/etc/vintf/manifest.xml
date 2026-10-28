@@ -1,0 +1,33 @@
+<!-- Merged device manifest for the recovery ramdisk.
+     hwservicemanager validates HIDL registrations against a single manifest.xml;
+     it does not merge the /vendor/etc/vintf/manifest/ fragments itself, so the
+     HIDL gatekeeper/keymaster services were being rejected (SIGABRT / exit 1).
+     Entries mirror bronco's Android 16 stock /vendor/etc/vintf/manifest.xml. -->
+<manifest version="1.0" type="device">
+    <hal format="hidl">
+        <name>android.hardware.gatekeeper</name>
+        <transport>hwbinder</transport>
+        <fqname>@1.0::IGatekeeper/default</fqname>
+    </hal>
+    <hal format="aidl">
+        <name>android.hardware.security.keymint</name>
+        <fqname>IKeyMintDevice/default</fqname>
+    </hal>
+    <hal format="aidl">
+        <name>android.hardware.security.sharedsecret</name>
+        <fqname>ISharedSecret/default</fqname>
+    </hal>
+    <hal format="aidl">
+        <name>android.hardware.security.secureclock</name>
+        <fqname>ISecureClock/default</fqname>
+    </hal>
+    <hal format="aidl">
+        <name>android.hardware.security.keymint</name>
+        <fqname>IRemotelyProvisionedComponent/default</fqname>
+    </hal>
+    <hal format="hidl">
+        <name>vendor.qti.hardware.qseecom</name>
+        <transport>hwbinder</transport>
+        <fqname>@1.0::IQSEECom/default</fqname>
+    </hal>
+</manifest>

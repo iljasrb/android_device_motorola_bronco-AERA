@@ -1,0 +1,47 @@
+<!-- Recovery VINTF manifest.
+     In recovery, libhidlbase and servicemanager use VintfObjectRecovery, which
+     merges /system/etc/vintf/manifest.xml with /system/etc/vintf/manifest/*.xml
+     and treats everything as a device manifest. It does NOT read the vendor
+     manifest, so every HAL the recovery registers or looks up must be declared
+     here. Without these entries:
+       - keystore2 SIGABRTs ("Could not find
+         android.system.keystore2.IKeystoreService/default in the VINTF manifest")
+       - gatekeeper and keymaster 4.1 SIGABRT ("must be in VINTF manifest in
+         order to register/get") and crash-loop, which also tears down the
+         shared QSEECom TA handle out from under keymint. -->
+<manifest version="1.0" type="device">
+    <!-- hwservicemanager reads this manifest to decide whether HIDL is
+         supported at all; without it getTransport() returns EMPTY and the
+         daemon disables itself, so every HIDL client falls back to passthrough
+         and gatekeeper never sees the SPU-backed security level. -->
+    <hal format="hidl">
+        <name>android.hidl.manager</name>
+        <transport>hwbinder</transport>
+        <fqname>@1.0::IServiceManager/default</fqname>
+        <fqname>@1.1::IServiceManager/default</fqname>
+        <fqname>@1.2::IServiceManager/default</fqname>
+    </hal>
+
+    <hal format="aidl">
+        <name>android.system.keystore2</name>
+        <fqname>IKeystoreService/default</fqname>
+    </hal>
+    <hal format="aidl">
+        <name>android.hardware.security.keymint</name>
+        <fqname>IKeyMintDevice/default</fqname>
+        <fqname>IRemotelyProvisionedComponent/default</fqname>
+    </hal>
+    <hal format="aidl">
+        <name>android.hardware.security.sharedsecret</name>
+        <fqname>ISharedSecret/default</fqname>
+    </hal>
+    <hal format="aidl">
+        <name>android.hardware.security.secureclock</name>
+        <fqname>ISecureClock/default</fqname>
+    </hal>
+    <hal format="hidl">
+        <name>android.hardware.gatekeeper</name>
+        <transport>hwbinder</transport>
+        <fqname>@1.0::IGatekeeper/default</fqname>
+    </hal>
+</manifest>

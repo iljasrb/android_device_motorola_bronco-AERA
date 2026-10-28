@@ -1,0 +1,318 @@
+# Motorola bronco (ThinkPhone) recovery init.
+#
+# The recovery partition holds a ramdisk only; the bootloader boots it with the
+# boot partition's kernel and the vendor_boot vendor ramdisk (modules included).
+#
+# USB: bronco uses the configfs gadget. The AERA recovery init.rc already drives
+# the full configfs flow (gadget, functionfs, UDC bind, adbd); it only needs
+# sys.usb.configfs=1 and sys.usb.controller set. Do not add private usb-mode
+# services: they race the configfs/ffs state machine that init.rc already owns.
+#
+# FBE decryption chain:
+#   TWRP vold -> keystore2 (AIDL) -> keymint (AIDL) -> libQSEEComAPI + qseecomd
+#   -> TEE, with the vendor gatekeeper HAL (HIDL 1.0) for credential checks.
+# AERA ships no QCOM crypto rc, so every piece is brought up here.
+#
+# Ordering is what makes this reliable:
+#   on fs starts qseecomd, so the TEE listeners are registered before the
+#   crypto services need them; spss-start.sh fixes the TEE/SPU node ownership
+#   and brings up the SPSS/ADSP in parallel;
+#   prepdecrypt.sh loads the installed ROM's patch level and sets crypto.ready
+#   immediately; keymint-qti starts from that property, and keystore2.rc starts
+#   keystore2 as soon as qseecomd registers its listeners. keystore2 then waits
+#   for the AIDL KeyMint service instead of racing its registration.
+# vold blocks in AServiceManager_waitForService(keystore2) during its first
+# Decrypt_Data(). Starting keystore2 after the keymint process exists but before
+# it registers sends it down the legacy HIDL path, which rejects the wrapped
+# metadata keyblob with INCOMPATIBLE_BLOCK_MODE: /data stays unmounted and TWRP
+# never gets far enough to show the decrypt page.
+#
+# State: metadata/FBE-DE and credential (CE) decryption work. Fastbootd uses
+# the AOSP AIDL boot-control HAL from /system (see the rc override in
+# system/etc/init), so it does not depend on /vendor being mounted.
+
+on early-init
+    # Recovery runs the TEE stack itself, but its policy does not grant the
+    # recovery domain the keystore2/keymint connections that system policy
+    # grants to keystore/vold. keystore2 then falls back to the legacy HIDL
+    # keymaster wrapper, which cannot unwrap this device's hardware-wrapped
+    # (wrappedkey_v0) metadata key (KEY_REQUIRES_UPGRADE -> INVALID_ARGUMENT),
+    # so /data never mounts.
+    write /sys/fs/selinux/enforce 0
+
+on init
+    setprop sys.usb.configfs 1
+
+on property:ro.boot.usbcontroller=*
+    setprop sys.usb.controller ${ro.boot.usbcontroller}
+    wait /sys/bus/platform/devices/${ro.boot.usb.dwc3_msm:-a600000.ssusb}/mode
+    write /sys/bus/platform/devices/${ro.boot.usb.dwc3_msm:-a600000.ssusb}/mode peripheral
+
+on fs
+    wait /dev/block/platform/soc/${ro.boot.bootdevice}
+    symlink /dev/block/platform/soc/${ro.boot.bootdevice} /dev/block/bootdevice
+    write /proc/sys/kernel/firmware_config/force_sysfs_fallback 1
+
+    # Secure processor. Stock Android keeps 188101c.remoteproc-spss running; in
+    # recovery it stays detached unless started, which leaves the SPU-backed
+    # keymaster/gatekeeper paths unavailable ("SPU is not available").
+    # spss-start.sh fixes the TEE/SPU node ownership and starts the SPSS/ADSP.
+    start spss-spu
+    # spdaemon and sec_nvm keep their state under /mnt/vendor/persist (the real
+    # persist partition is not mounted in recovery). Without these directories
+    # spdaemon never signals pil_called and sec_nvm registers no SPU channels,
+    # so the gatekeeper HAL spins waiting for the SPU 'cryptoapp' server.
+    mkdir /mnt/vendor/persist/iar_db 0770 system system
+    mkdir /mnt/vendor/persist/secnvm 0770 system system
+    setprop persist.vendor.enable_spu true
+
+    # TEE: qseecomd owns /dev/qseecom; keymint unwraps the metadata key.
+    # Start it here, not from spss-start.sh, so its listener registration has
+    # the whole prepdecrypt pass to complete. This is the #33-proven sequence:
+    # keystore2 starts from vendor.sys.listeners.registered and waits for the
+    # AIDL KeyMint service before doing any crypto.
+    start qseecomd
+
+    # Secure Services Gateway daemon: stock Android runs it next to keymint and
+    # the gatekeeper HAL, and the TEE credential path expects it on SPU
+    # platforms. It is opportunistic: ssgtzd-start.sh waits briefly for TWRP to
+    # expose /vendor and then gives up without blocking decryption.
+    start ssgtzd-boot
+
+    # KeyMint must not start until the installed ROM's security patch level has
+    # replaced the recovery placeholder; otherwise the metadata keyblob upgrade
+    # can be rejected as invalid. prepdecrypt sets crypto.ready when done.
+    start crypto-prep
+
+    # The first Decrypt_Data() after boot cannot upgrade the wrapped metadata
+    # keyblob. crypto-start waits for that attempt, reopens keymint/keystore2
+    # and restarts the recovery binary so the blob is unwrapped on the next pass.
+    start crypto-bootstrap
+
+    # Fastbootd resolves android.hardware.boot.IBootControl/default through the
+    # AOSP AIDL HAL. class_start hal does not include early_hal, so start it here
+    # explicitly, after /dev/block/bootdevice and /etc/recovery.fstab are ready.
+    start vendor.boot-default
+
+on property:crypto.ready=1
+    start keymint-qti
+
+# The SPU stack must come up only after the SPSS has loaded its 2nd phase:
+# spdaemon then signals spcom 'pil_called', sec_nvm registers the SPU channels,
+# and the SPSS starts its 'cryptoapp' server. Started earlier, spdaemon's 300 s
+# 'SPU ready' wait expires, cryptoapp never appears, and the vendor gatekeeper
+# HAL blocks forever inside spu_init().
+on property:aera.spss.ready=1
+    start spu_service
+    start spuservice
+    start gatekeeperd
+
+# Credential (CE) checks need the vendor HIDL gatekeeper HAL. It must start
+# only after the TEE listeners are registered: started earlier it takes the
+# legacy verify() path (docs/a17-decrypt-progress.md), which the TA rejects
+# with ERROR_RETRY_TIMEOUT. gatekeeperd retries until it registers.
+on property:vendor.sys.listeners.registered=true
+    start gatekeeper-hal
+
+# Hand /vendor back to TWRP/installers on request: setprop aera.release.mounts 1
+on property:aera.release.mounts=1
+    start release-mounts
+
+on boot
+    setprop sys.usb.config adb
+
+# bronco has no legacy android0 gadget and no /dev/mtp_usb, and the kernel has
+# no configfs MTP function (CONFIG_USB_CONFIGFS_F_MTP is off). TWRP's MTP stack
+# can still run entirely over FunctionFS: it opens /dev/usb-ffs/mtp/ep0, writes
+# the MTP descriptors itself and then publishes sys.usb.ffs.mtp.ready. So mount a
+# second functionfs instance and bind the gadget only once both function sets
+# have their descriptors - the kernel refuses to bind an ffs function without
+# them.
+on fs
+    mkdir /dev/usb-ffs 0770 shell shell
+    mkdir /dev/usb-ffs/mtp 0770 shell shell
+    # functionfs refuses to mount an instance whose configfs function is still
+    # absent (ENOENT), so create ffs.mtp first. /config is mounted by init.rc's
+    # own "on fs && sys.usb.configfs=1" action, hence the bounded wait.
+    wait /config/usb_gadget/g1 5
+    mkdir /config/usb_gadget/g1/functions/ffs.mtp 0770 shell shell
+    mount functionfs mtp /dev/usb-ffs/mtp rmode=0770,fmode=0660,uid=1000,gid=1000
+
+on property:sys.usb.config=mtp,adb
+    start adbd
+    start mtp-fallback
+
+on property:sys.usb.config=none && property:sys.usb.configfs=1
+    rm /config/usb_gadget/g1/configs/b.1/f2
+
+on property:sys.usb.config=mtp,adb && property:sys.usb.configfs=1 && property:sys.usb.ffs.ready=1 && property:sys.usb.ffs.mtp.ready=1
+    write /config/usb_gadget/g1/idProduct 0x4EE2
+    write /config/usb_gadget/g1/configs/b.1/strings/0x409/configuration "mtp_adb"
+    mkdir /config/usb_gadget/g1/functions/ffs.mtp 0770 shell shell
+    symlink /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/b.1/f1
+    symlink /config/usb_gadget/g1/functions/ffs.mtp /config/usb_gadget/g1/configs/b.1/f2
+    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+    setprop sys.usb.state ${sys.usb.config}
+
+# TWRP also forces sys.usb.config=mass_storage,adb on some paths; there is no
+# mass-storage function in this gadget, so keep that one collapsed to adb.
+on property:sys.usb.config=mass_storage,adb
+    setprop sys.usb.config adb
+
+# One-shot guard: keeps USB alive if TWRP's MTP server never publishes its
+# descriptors (see system/bin/mtp-fallback.sh).
+service mtp-fallback /system/bin/sh /system/bin/mtp-fallback.sh
+    class core
+    oneshot
+    user root
+    disabled
+    seclabel u:r:recovery:s0
+
+service keymint-qti /system/bin/android.hardware.security.keymint-service-qti
+    class early_hal
+    user system
+    group system drmrpc
+    # The system libbinder must win over /vendor/lib64/libbinder.so: the vendor
+    # copy is a VNDK build whose ProcessState defaults to /dev/vndbinder, so
+    # AServiceManager_addService() registers with vndservicemanager. KeyMint's
+    # service names are only in service_contexts (not vndservice_contexts), so
+    # that registration fails and keystore2 waits forever on /dev/binder.
+    # Keep /system first; vendor entries are still needed for libqtikeymint.
+    setenv LD_LIBRARY_PATH /system/lib64:/system/lib:/vendor/lib64:/vendor/lib:/sbin
+    seclabel u:r:recovery:s0
+
+service ssgtzd /vendor/bin/ssgtzd
+    class early_hal
+    user system
+    group system inet
+    socket ssgtzd stream 0660 system inet
+    socket ssgtzd_opener stream 0660 system inet
+    socket qwes_ipc stream 0660 system inet
+    seclabel u:r:recovery:s0
+
+service release-mounts /system/bin/release-mounts.sh
+    class core
+    oneshot
+    user root
+    seclabel u:r:recovery:s0
+
+service ssgtzd-boot /system/bin/ssgtzd-start.sh
+    class core
+    oneshot
+    user root
+    seclabel u:r:recovery:s0
+
+service gatekeeper-hal /system/bin/android.hardware.gatekeeper@1.0-service-qti
+    class early_hal
+    interface android.hardware.gatekeeper@1.0::IGatekeeper default
+    # root: this vendor HAL aborts in QSEECom_start_app when run as uid 1000 in
+    # recovery, but runs as root.
+    user root
+    group root drmrpc
+    setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib:/system/lib64:/system/lib:/sbin
+    disabled
+    seclabel u:r:recovery:s0
+
+service qseecomd /system/bin/qseecomd
+    socket notify-topology stream 660 system drmrpc
+    class core
+    user root
+    group root drmrpc
+    seclabel u:r:recovery:s0
+
+service crypto-prep /system/bin/sh /system/bin/prepdecrypt.sh
+    class core
+    oneshot
+    user root
+    group root
+    seclabel u:r:recovery:s0
+
+service crypto-bootstrap /system/bin/sh /system/bin/crypto-start.sh
+    class core
+    oneshot
+    user root
+    group root
+    seclabel u:r:recovery:s0
+
+# Qualcomm WLAN calibration/MAC daemon. Run the RAM copy with the RAM library
+# closure: leaving cnss-daemon executing from /vendor is what made TWRP's
+# "Unmounting Vendor..." fail while a zip was being installed.
+service cnss-daemon /system/bin/cnss-daemon -n -l
+    class core
+    user system
+    group system inet net_admin wifi
+    capabilities NET_ADMIN
+    setenv LD_LIBRARY_PATH /system/lib64/cnss:/system/lib64:/system/lib:/sbin
+    disabled
+    seclabel u:r:recovery:s0
+
+# WLAN bring-up must run after /data is mounted: bringing the driver up before
+# the metadata key upgrade makes the upgrade fail, so the service is disabled
+# and started by crypto-start.sh once /data is available.
+service wlan-bootstrap /system/bin/sh /system/bin/wlan-start.sh
+    class core
+    oneshot
+    user root
+    disabled
+    seclabel u:r:recovery:s0
+
+# TWRP's WLAN backend expects an init service called wpa_supplicant with the
+# control socket in /tmp/recovery/sockets (wlan.cpp), and starts it on demand by
+# setting sys.aera.wlan.up=1. The block resets the property so the next Enable
+# fires again after a Disable.
+service wpa_supplicant /system/bin/wpa_supplicant -Dnl80211 -iwlan0 -c/system/etc/wifi/wpa_supplicant.conf -C/tmp/recovery/sockets -O/tmp/recovery/sockets
+    class core
+    user root
+    group root inet net_admin net_raw wifi
+    # Do not prepend /vendor/lib*: the vendor libbinder_ndk shadows the system
+    # one and AIDL service registration fails ("Failed to initialize
+    # wpa_supplicant"). The binary lives in the recovery ramdisk and must link
+    # against its own system libraries.
+    disabled
+    seclabel u:r:recovery:s0
+
+on property:sys.aera.wlan.up=1
+    start wpa_supplicant
+    setprop sys.aera.wlan.up 0
+
+service spss-spu /system/bin/sh /system/bin/spss-start.sh
+    class core
+    user root
+    seclabel u:r:recovery:s0
+    oneshot
+
+service spdaemon /system/bin/spdaemon
+    class core
+    user system
+    group system
+    seclabel u:r:recovery:s0
+
+service sec_nvm /system/bin/sec_nvm
+    class core
+    user system
+    group system
+    seclabel u:r:recovery:s0
+
+service spu_service /system/bin/vendor.qti.spu@1.1-service
+    class hal
+    setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib:/system/lib64:/system/lib
+    user system
+    group system
+    seclabel u:r:recovery:s0
+
+service spuservice /system/bin/vendor.qti.spu@2.0-service
+    class hal
+    setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib:/system/lib64:/system/lib
+    user system
+    group system
+    seclabel u:r:recovery:s0
+
+# Framework gatekeeper (android.service.gatekeeper.IGateKeeperService). Not used
+# by vold, but some tools expect it; started by crypto-start once /data exists,
+# because gatekeeperd chdir()s into /data/misc/gatekeeper at startup.
+service gatekeeperd /system/bin/gatekeeperd /data/misc/gatekeeper
+    class core
+    user system
+    group system
+    disabled
+    seclabel u:r:recovery:s0
