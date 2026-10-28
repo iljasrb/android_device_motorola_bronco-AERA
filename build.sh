@@ -91,6 +91,11 @@ grep -q 'kLocalPackage' "$recovery_mod/twrpinstall/adb_install.cpp" ||
 grep -q 'ReleaseVendorMountsForInstall' "$recovery_mod/aeraui/platform/aera_backend.cpp" ||
     git -C "$recovery_mod" apply "$root_dir/patches/recovery-release-vendor-before-install.patch"
 
+# make_f2fs leaves userdata checkpoint-disabled, so every write made in a
+# recovery session was rolled back on the next boot (settings, backups).
+grep -q 'checkpoint=enable' "$recovery_mod/aeraui/platform/aera_backend.cpp" ||
+    git -C "$recovery_mod" apply "$root_dir/patches/recovery-userdata-checkpoint.patch"
+
 # Point the in-recovery update check at our own catalog instead of
 # aera-recovery.com.
 grep -q 'rom.flac.moe/bronco/recovery/aera' "$recovery_mod/aeraui/features/update/update_manager.cpp" ||

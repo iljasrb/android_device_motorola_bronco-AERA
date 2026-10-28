@@ -1,0 +1,30 @@
+diff --git a/aeraui/platform/aera_backend.cpp b/aeraui/platform/aera_backend.cpp
+index 7176b32f..ad20ce43 100644
+--- a/aeraui/platform/aera_backend.cpp
++++ b/aeraui/platform/aera_backend.cpp
+@@ -128,6 +130,9 @@ extern "C" int aeraui_decrypt_data(const char *credential, int user_id) {
+   }
+   PartitionManager.Decrypt_Adopted();
+   PartitionManager.Update_System_Details();
++  // make_f2fs leaves userdata checkpoint-disabled; while that flag is set every
++  // write made in recovery is rolled back on the next boot.
++  TWFunc::Exec_Cmd("mount -o remount,checkpoint=enable /data 2>/dev/null");
+   return 0;
+ }
+ 
+@@ -2018,9 +2100,13 @@ static int RecoveryRunJobImpl(const JobRequest &request) {
+     const auto found = std::find_if(mounts.begin(), mounts.end(),
+         [&](const Volume &volume) { return volume.path == request.path; });
+     if (found == mounts.end()) return 1;
+-    return (request.job == Job::kMount
++    const bool mounted = request.job == Job::kMount
+         ? PartitionManager.Mount_By_Path(request.path, true)
+-        : PartitionManager.UnMount_By_Path(request.path, true)) ? 0 : 1;
++        : PartitionManager.UnMount_By_Path(request.path, true);
++    // A checkpoint-disabled userdata drops recovery writes on the next boot.
++    if (mounted && request.job == Job::kMount && request.path == "/data")
++      TWFunc::Exec_Cmd("mount -o remount,checkpoint=enable /data 2>/dev/null");
++    return mounted ? 0 : 1;
+   }
+   if (request.partitions.empty()) return 1;
+   std::vector<Volume> allowed = request.job == Job::kRestore
