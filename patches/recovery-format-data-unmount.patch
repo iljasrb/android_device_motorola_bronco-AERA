@@ -1,5 +1,5 @@
 diff --git a/aeraui/platform/aera_backend.cpp b/aeraui/platform/aera_backend.cpp
-index 7176b32f..ad20ce43 100644
+index 7176b32f..83c2d64a 100644
 --- a/aeraui/platform/aera_backend.cpp
 +++ b/aeraui/platform/aera_backend.cpp
 @@ -55,7 +55,9 @@
@@ -12,7 +12,7 @@ index 7176b32f..ad20ce43 100644
  
  #include "data.hpp"
  #include "aera_flash_log.hpp"
-@@ -2006,8 +2037,59 @@ static int RecoveryRunJobImpl(const JobRequest &request) {
+@@ -2006,8 +2040,59 @@ static int RecoveryRunJobImpl(const JobRequest &request) {
        property_set("sys.usb.config", "none");
        usleep(300000);
      }
@@ -73,7 +73,7 @@ index 7176b32f..ad20ce43 100644
      PartitionManager.Update_System_Details();
      TWFunc::SetPerformanceMode(false);
      if (restore_fastboot) property_set("sys.usb.config", "fastboot");
-@@ -3394,6 +3480,16 @@ bool WriteFileAtomically(const std::string& path, const std::string& contents) {
+@@ -3394,6 +3483,16 @@ bool WriteFileAtomically(const std::string& path, const std::string& contents) {
      unlink(temporary.c_str());
      return false;
    }

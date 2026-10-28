@@ -1,0 +1,53 @@
+diff --git a/aeraui/platform/aera_backend.cpp b/aeraui/platform/aera_backend.cpp
+index 7176b32f..83c2d64a 100644
+--- a/aeraui/platform/aera_backend.cpp
++++ b/aeraui/platform/aera_backend.cpp
+@@ -147,6 +152,9 @@ std::string SessionLanguageOr(const std::string &stored) {
+ }
+ bool WriteFileAtomically(const std::string &path, const std::string &contents);
+ kernel::Settings gDeveloperSettings;
++// Set once the on-disk preferences have been read (or found absent) so a save
++// can never overwrite them with session defaults before the load ran.
++std::atomic<bool> gPreferencesLoaded{false};
+ bool SaveAeraPreferences(bool require_early = false);
+ bool ResetAeraSettings(bool theme);
+ bool ResetAeraThemeSection(ThemeSection section);
+@@ -3568,11 +3671,17 @@ void LoadAeraPreferencesIfAvailable() {
+       !shared_repair_started.exchange(true)) {
+     std::thread([] { aera::shared_storage::NormalizeAll(); }).detach();
+   }
+-  if (loaded) return;
++  if (loaded) {
++    gPreferencesLoaded.store(true);
++    return;
++  }
+   std::ifstream input(kAeraPreferencesPath);
+   // Before decryption /data/media/0 is intentionally unavailable. Leave the
+   // flag clear so the first post-decryption scene retries automatically.
+-  if (!input) return;
++  if (!input) {
++    if (access("/data/media/0", F_OK) == 0) gPreferencesLoaded.store(true);
++    return;
++  }
+ 
+   EarlyUiPreferences full_ui = gEarlyDefaults;
+   std::string line;
+@@ -3631,11 +3740,18 @@ void LoadAeraPreferencesIfAvailable() {
+   ApplyEarlyUiSideEffects();
+   if (!SaveEarlyUiPreferences()) LOGERR("AERA: could not refresh the early UI preference cache.\n");
+   if (!SaveEarlyWifiPreferences()) LOGERR("AERA: could not refresh the early WLAN cache.\n");
++  gPreferencesLoaded.store(true);
+   LOGINFO("AERA: restored preferences from shared storage.\n");
+ }
+ 
+ bool SaveAeraPreferences(bool require_early) {
+   constexpr const char *directory = "/data/media/0/AERA";
++  // Session defaults must never be written over preferences that were not read
++  // yet; the UI autosaves during startup, before /data is necessarily mounted.
++  if (!gPreferencesLoaded.load()) {
++    LoadAeraPreferencesIfAvailable();
++    if (!gPreferencesLoaded.load()) return false;
++  }
+   if (!TWFunc::Recursive_Mkdir(directory, false)) return false;
+   std::ostringstream output;
+   output << "clock24=" << DataManager::GetIntValue("tw_military_time") << '\n'

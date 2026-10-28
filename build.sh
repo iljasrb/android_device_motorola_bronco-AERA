@@ -96,6 +96,11 @@ grep -q 'ReleaseVendorMountsForInstall' "$recovery_mod/aeraui/platform/aera_back
 grep -q 'checkpoint=enable' "$recovery_mod/aeraui/platform/aera_backend.cpp" ||
     git -C "$recovery_mod" apply "$root_dir/patches/recovery-userdata-checkpoint.patch"
 
+# The UI autosaves during startup, before /data is necessarily mounted; without
+# a load-first guard those session defaults overwrite the stored preferences.
+grep -q 'gPreferencesLoaded' "$recovery_mod/aeraui/platform/aera_backend.cpp" ||
+    git -C "$recovery_mod" apply "$root_dir/patches/aeraui-preferences-persistence.patch"
+
 # Point the in-recovery update check at our own catalog instead of
 # aera-recovery.com.
 grep -q 'rom.flac.moe/bronco/recovery/aera' "$recovery_mod/aeraui/features/update/update_manager.cpp" ||
