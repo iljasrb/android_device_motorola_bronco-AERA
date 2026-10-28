@@ -1,0 +1,10 @@
+# FUSE passthrough
+persist.sys.fuse.passthrough.enable=true
+
+# Virtual A/B. bronco ships virtual A/B (device.mk sets
+# PRODUCT_VIRTUAL_AB_OTA), and update_engine decides how much of super a
+# sideloaded payload may use from this property. Without it, update_engine
+# treats the device as non-VAB and rejects any payload larger than super/2 with
+# "exceeded HALF OF allocatable space" (error 7) - a full ROM OTA needs the
+# whole super for the target slot.
+ro.virtual_ab.enabled=true
