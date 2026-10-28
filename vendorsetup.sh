@@ -37,7 +37,7 @@ if [ "$1" = "$FDEVICE" -o "$AERA_BUILD_DEVICE" = "$FDEVICE" ]; then
 	export AERA_VANILLA_BUILD=1
 	export AERA_USE_DMSETUP=1
 	export AERA_PRODUCT_PREFIX=AERA
-	export AERA_BUILD_STATUS=Official
+	export AERA_BUILD_STATUS=Unofficial
 	# Beta, not Stable: Stable forces OF_ADVANCED_SECURITY, which disables
 	# adb/MTP at boot until toggled in the UI.
 	export AERA_BUILD_TYPE=Beta

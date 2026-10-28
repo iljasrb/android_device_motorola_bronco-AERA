@@ -1,0 +1,16 @@
+diff --git a/aeraui/features/update/update_manager.cpp b/aeraui/features/update/update_manager.cpp
+index ce3ca641..74213ac4 100644
+--- a/aeraui/features/update/update_manager.cpp
++++ b/aeraui/features/update/update_manager.cpp
+@@ -35,9 +35,9 @@ namespace {
+ 
+ constexpr char kLogTag[] = "AERAUpdate";
+ constexpr char kStableCatalogUrl[] =
+-    "https://aera-recovery.com/catalog.json";
++    "https://rom.flac.moe/bronco/recovery/AERA/catalog.json";
+ constexpr char kNightlyCatalogUrl[] =
+-    "https://aera-recovery.com/catalog-nightly.json";
++    "https://rom.flac.moe/bronco/recovery/AERA/catalog-nightly.json";
+ constexpr char kCatalogPath[] = "/tmp/aera-update-catalog.json";
+ constexpr char kUpdateRoot[] = "/sdcard/AERA/Updates";
+ constexpr uint64_t kMaxCatalog = 1024 * 1024;

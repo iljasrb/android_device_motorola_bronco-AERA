@@ -91,6 +91,11 @@ grep -q 'kLocalPackage' "$recovery_mod/twrpinstall/adb_install.cpp" ||
 grep -q 'ReleaseVendorMountsForInstall' "$recovery_mod/aeraui/platform/aera_backend.cpp" ||
     git -C "$recovery_mod" apply "$root_dir/patches/recovery-release-vendor-before-install.patch"
 
+# Point the in-recovery update check at our own catalog instead of
+# aera-recovery.com.
+grep -q 'rom.flac.moe/bronco/recovery/AERA' "$recovery_mod/aeraui/features/update/update_manager.cpp" ||
+    git -C "$recovery_mod" apply "$root_dir/patches/aeraui-update-catalog-url.patch"
+
 # Format Data needs the crypto consumers stopped before mkfs.f2fs.
 grep -q 'keystore2 -> /data/misc/keystore' "$recovery_mod/aeraui/platform/aera_backend.cpp" ||
     git -C "$recovery_mod" apply "$root_dir/patches/recovery-format-data-unmount.patch"
@@ -103,6 +108,10 @@ cd "$aera_dir"
 rm -f \
     "out/target/product/bronco/recovery/root/system/etc/vintf/manifest/android.hardware.boot-service.qti.xml" \
     "out/target/product/bronco/recovery/root/system/bin/usb-mode.sh"
+
+# Keep the build host out of ro.build.user/ro.build.host in the published image.
+export BUILD_USERNAME=aera
+export BUILD_HOSTNAME=aera
 
 export AERA_BUILD_DEVICE=bronco
 # shellcheck disable=SC1091
