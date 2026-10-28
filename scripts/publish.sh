@@ -3,11 +3,12 @@
 # in-recovery update catalog.
 #
 #   scripts/publish.sh --dry-run     # default: print, change nothing
-#   scripts/publish.sh --yes         # upload, latest/ replaced, previous in archive/
+#   scripts/publish.sh --yes         # upload and replace latest/ (no archive kept)
+#
+#   scripts/publish.sh --yes --keep  # ... and keep the replaced build in archive/
 #
 # Publishes the newest out/AERA-bronco-*.img and .zip plus catalog.json, the
 # feed the in-recovery updater reads (schema 1).
-#   scripts/publish.sh --yes --purge # drop older builds
 #
 # Files are uploaded into a staging directory and swapped into latest/ only after
 # every one landed at the expected size, so an interrupted upload leaves the
@@ -31,13 +32,13 @@ site=${PUBLISH_ROOT:?publish: set PUBLISH_ROOT (see .env.publish)}
 baseurl=${PUBLISH_URL:-https://rom.flac.moe/bronco/recovery/aera}
 stage=$site/_staging
 
-dry=1 purge=0
+dry=1 keep=0
 for a in "$@"; do
     case $a in
         --dry-run) dry=1 ;;
         --yes|-y) dry=0 ;;
-        --purge) purge=1 ;;
-        *) echo "usage: $0 [--yes] [--purge] [--dry-run]" >&2; exit 2 ;;
+        --keep) keep=1 ;;
+        *) echo "usage: $0 [--yes] [--keep] [--dry-run]" >&2; exit 2 ;;
     esac
 done
 
@@ -131,13 +132,13 @@ for f in "$img_name" "$zip_name"; do
     echo "  ok $f ($local_size bytes)"
 done
 
-if [ "$purge" = 1 ]; then
-    rsh "rm -rf $site/archive && mv $stage/$catalog $site/$catalog && mv $stage $site/latest"
+if [ "$keep" = 0 ]; then
+    rsh "rm -rf $site/latest && mv $stage/$catalog $site/$catalog && mv $stage $site/latest"
 else
     rsh "mkdir -p $site/archive && rm -rf $site/archive/$build &&
          mv $stage/$catalog $site/$catalog &&
          { [ -d $site/latest ] && mv $site/latest $site/archive/$build || true; } &&
-         mv $stage $site/latest"
+         rm -rf $site/latest && mv $stage $site/latest"
 fi
 
 if [ "$dry" = 1 ]; then
