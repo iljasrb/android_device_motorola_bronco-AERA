@@ -1,0 +1,17 @@
+# Local research and development notes stay out of the repo
+docs/
+
+# Build outputs, rollback images and checksum sidecars
+out/
+backup/
+*.img
+*.zip
+*.log
+*.md5
+*.sha256
+
+# Publishing target: host and path are local, this repo is public
+.env.publish
+
+# Local helper scripts for TEE blob extraction and sideload tests
+scripts/dev/
