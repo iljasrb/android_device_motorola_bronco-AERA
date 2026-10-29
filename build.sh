@@ -101,6 +101,11 @@ grep -q 'checkpoint=enable' "$recovery_mod/partition.cpp" ||
 grep -q 'gPreferencesLoaded' "$recovery_mod/aeraui/platform/aera_backend.cpp" ||
     git -C "$recovery_mod" apply "$root_dir/patches/aeraui-preferences-persistence.patch"
 
+# Touch must wake the display, otherwise a blanked screen ignores touches while
+# hardware keys still work.
+grep -q 'A touch is a wake gesture' "$recovery_mod/aeraui/core/runner.cpp" ||
+    git -C "$recovery_mod" apply "$root_dir/patches/aeraui-touch-wake.patch"
+
 # charger polls a health HAL that recovery does not have (1 s block per try).
 grep -q 'Not started in recovery: charger polls' "$recovery_mod/etc/init.rc" ||
     git -C "$recovery_mod" apply "$root_dir/patches/recovery-stop-charger.patch"
