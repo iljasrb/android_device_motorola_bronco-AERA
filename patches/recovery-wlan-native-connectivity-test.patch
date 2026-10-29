@@ -1,5 +1,5 @@
 diff --git a/wlan.cpp b/wlan.cpp
-index a248132f..de72ad49 100644
+index a248132f..c1e5a268 100644
 --- a/wlan.cpp
 +++ b/wlan.cpp
 @@ -8,10 +8,16 @@
@@ -19,7 +19,7 @@ index a248132f..de72ad49 100644
  #include <sys/stat.h>
  #include <sys/types.h>
  #include <unistd.h>
-@@ -74,6 +80,113 @@ static constexpr int WLAN_SUPP_READY_TIMEOUT_MS = 60000;
+@@ -74,6 +80,116 @@ static constexpr int WLAN_SUPP_READY_TIMEOUT_MS = 60000;
   * wrapper (mondrian_wlan_up.sh); it is now native init builtins. */
  static const char* WLAN_SUPP_PREP_PROP = "sys.aera.wlan.up";
  
@@ -27,7 +27,8 @@ index a248132f..de72ad49 100644
 +// Android properties. Tools (and the connection test below) use libc's
 +// getaddrinfo(), which reads /etc/resolv.conf. Keep that file in sync whenever
 +// a WLAN link is up, including links configured outside the TWRP UI.
-+static bool EnsureResolverFile(const std::string& iface) {
++static bool EnsureResolverFile(const std::string& iface,
++                                 std::vector<std::string>* resolved = nullptr) {
 +    std::vector<std::string> servers;
 +    const std::string prefix = "net." + iface + ".dns";
 +    for (int index = 1; index <= 4; ++index) {
@@ -54,6 +55,8 @@ index a248132f..de72ad49 100644
 +    for (const auto& server : servers)
 +        resolver << "nameserver " << server << "\n";
 +    const std::string desired = resolver.str();
++
++    if (resolved) *resolved = servers;
 +
 +    std::ifstream current_file("/system/etc/resolv.conf");
 +    std::string current((std::istreambuf_iterator<char>(current_file)),
@@ -133,7 +136,7 @@ index a248132f..de72ad49 100644
  static int HexDigitValue(char value) {
      if (value >= '0' && value <= '9') return value - '0';
      if (value >= 'a' && value <= 'f') return value - 'a' + 10;
-@@ -966,6 +1079,12 @@ bool Wlan::InfoLocked()
+@@ -966,6 +1082,12 @@ bool Wlan::InfoLocked()
          DataManager::SetValue("wlan_connected_name", ssid);
          DataManager::SetValue("wlan_info_text", "Connected: " + ssid + "  IP: " + ip_addr);
  
@@ -146,24 +149,24 @@ index a248132f..de72ad49 100644
          return true;
      }
  
-@@ -1011,18 +1130,20 @@ bool Wlan::TestConnection()
+@@ -1011,18 +1133,20 @@ bool Wlan::TestConnection()
          return true;
      }
  
 -    std::string busybox = GetBusyboxBinary();
 -    if (busybox.empty())
 -        busybox = "busybox";
+-
+-    std::string internet_output;
+-    bool internet_ok = RunCommand(busybox + " ping -c 1 -w 4 1.1.1.1 2>&1", internet_output);
 +    std::string internet_detail;
 +    const bool internet_ok = ProbeTcp("1.1.1.1", "443", &internet_detail);
  
--    std::string internet_output;
--    bool internet_ok = RunCommand(busybox + " ping -c 1 -w 4 1.1.1.1 2>&1", internet_output);
+-    std::string dns_output;
+-    bool dns_ok = RunCommand(busybox + " ping -c 1 -w 4 bing.com 2>&1", dns_output);
 +    std::string dns_detail;
 +    const bool dns_ok = ResolveHostname("bing.com", &dns_detail);
  
--    std::string dns_output;
--    bool dns_ok = RunCommand(busybox + " ping -c 1 -w 4 bing.com 2>&1", dns_output);
--
 -    LOGINFO("WLAN test internet output:\n%s\n", internet_output.c_str());
 -    LOGINFO("WLAN test DNS output:\n%s\n", dns_output.c_str());
 +    LOGINFO("WLAN test internet (1.1.1.1:443): %s%s%s\n",
@@ -177,3 +180,49 @@ index a248132f..de72ad49 100644
  
      if (internet_ok && dns_ok) {
          SetWlanTestResult(
+@@ -1452,41 +1627,11 @@ bool Wlan::StartDhcp() {
+         }
+     }
+ 
+-    /*
+-     * dhcptool publishes DNS servers as Android properties, but recovery has
+-     * no netd/resolver service to turn them into /etc/resolv.conf. BusyBox,
+-     * musl and other recovery tools therefore have an IP route while every
+-     * hostname lookup fails with EAI_SYSTEM. Install the lease DNS directly;
+-     * /etc is a ramdisk symlink to /system/etc, so this remains session-only.
+-     */
++    // dhcptool only publishes DNS servers as Android properties, and recovery
++    // has no netd/resolver service to turn them into /etc/resolv.conf. One
++    // helper owns that file for every caller (lease, link-up, connection test).
+     std::vector<std::string> servers;
+-    const std::string prefix = "net." + iface + ".dns";
+-    for (int index = 1; index <= 4; ++index) {
+-        char value[PROPERTY_VALUE_MAX] = {};
+-        property_get((prefix + std::to_string(index)).c_str(), value, "");
+-        in_addr address4 {};
+-        in6_addr address6 {};
+-        if (inet_pton(AF_INET, value, &address4) != 1 &&
+-            inet_pton(AF_INET6, value, &address6) != 1)
+-            continue;
+-        bool duplicate = false;
+-        for (const auto& server : servers)
+-            duplicate = duplicate || server == value;
+-        if (!duplicate)
+-            servers.emplace_back(value);
+-    }
+-    for (const char* fallback : {"1.1.1.1", "8.8.8.8"}) {
+-        bool duplicate = false;
+-        for (const auto& server : servers)
+-            duplicate = duplicate || server == fallback;
+-        if (!duplicate)
+-            servers.emplace_back(fallback);
+-    }
+-
+-    std::ostringstream resolver;
+-    for (const auto& server : servers)
+-        resolver << "nameserver " << server << "\n";
+-    if (!WriteFile("/system/etc/resolv.conf", resolver.str())) {
++    if (!EnsureResolverFile(iface, &servers)) {
+         gui_print("WLAN: DHCP succeeded, but resolver configuration failed\n");
+         return false;
+     }

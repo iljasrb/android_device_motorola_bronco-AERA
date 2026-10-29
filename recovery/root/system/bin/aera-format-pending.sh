@@ -35,10 +35,12 @@ take)
     /system/bin/make_f2fs -f -g android -O project_quota,extra_attr \
         -O casefold -C utf8 $USERDATA || exit 1
     # make_f2fs leaves the filesystem in checkpoint-disabled state, which drops
-    # every write made in a recovery session on the next boot. Mounting it with
-    # checkpoints enabled flips that flag and writes a clean checkpoint.
+    # every write made in a recovery session on the next boot. f2fs only accepts
+    # checkpoint=enable on a remount (at mount time it parses checkpoint=disable),
+    # so mount plainly first and flip the flag afterwards.
     mkdir -p /mnt/newdata
-    if mount -t f2fs -o rw,checkpoint=enable $USERDATA /mnt/newdata 2>/dev/null; then
+    if mount -t f2fs -o rw $USERDATA /mnt/newdata 2>/dev/null; then
+        mount -o remount,checkpoint=enable /mnt/newdata 2>/dev/null
         umount /mnt/newdata
     fi
     dd if=/dev/zero of=$META bs=4096 count=4 2>/dev/null || exit 1

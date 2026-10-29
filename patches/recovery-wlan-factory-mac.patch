@@ -1,8 +1,8 @@
 diff --git a/wlan.cpp b/wlan.cpp
-index a248132f..de72ad49 100644
+index a248132f..c1e5a268 100644
 --- a/wlan.cpp
 +++ b/wlan.cpp
-@@ -1154,39 +1275,84 @@ bool Wlan::StartSupplicant() {
+@@ -1154,39 +1278,90 @@ bool Wlan::StartSupplicant() {
  }
  
  bool Wlan::PrepareStableMacFirmware() {
@@ -64,12 +64,18 @@ index a248132f..de72ad49 100644
 +                        mac[i] = static_cast<unsigned char>((high << 4) | low);
 +                    }
 +                }
-+                // Reject multicast/broadcast and the all-zero placeholder.
++                // Reject multicast/broadcast, the all-zero placeholder, and
++                // locally-administered addresses: a factory address is always
++                // globally unique, and 02:.. would collide across devices.
 +                if (valid && !(mac[0] & 0x01)) {
 +                    bool all_zero = true;
 +                    for (unsigned char byte : mac)
 +                        all_zero = all_zero && byte == 0;
-+                    have_mac = !all_zero;
++                    if (!all_zero && (mac[0] & 0x02)) {
++                        LOGERR("WLAN: ignoring locally-administered factory MAC\n");
++                    } else {
++                        have_mac = !all_zero;
++                    }
 +                }
 +            }
 +        }
