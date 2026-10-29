@@ -23,6 +23,20 @@ if /system/bin/aera-format-pending.sh take; then
     # skip the whole crypto chain and let recovery mount userdata directly.
     echo "crypto-start: formatted userdata, continuing without crypto" > /dev/kmsg
     setprop aera.data.formatted 1
+    # WLAN still has to come up: this branch used to exit before
+    # wlan-bootstrap, so after a Format Data the Wi-Fi toggle stayed on
+    # "enabling" because wlan0 never appeared. Leave /data/misc alone here -
+    # Android must create its own tree on first boot - and only start the
+    # WLAN stack once userdata is mounted.
+    i=0
+    while ! grep -q ' /data ' /proc/mounts && [ "$i" -lt 300 ]; do
+        sleep 0.2
+        i=$((i + 1))
+    done
+    if grep -q ' /data ' /proc/mounts; then
+        setprop ctl.start wlan-bootstrap
+        echo "crypto-start: formatted userdata, starting WLAN bootstrap" > /dev/kmsg
+    fi
     exit 0
 fi
 

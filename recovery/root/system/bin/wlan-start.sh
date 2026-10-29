@@ -79,6 +79,15 @@ fi
 # the ramdisk (/vendor is a tmpfs directory here) with
 # read_mac_addr_from_mac_file=1 and write our own wlan_mac.bin on a tmpfs over
 # the persist copy, so the factory MAC from the kernel command line is used.
+# qca_cld3 loads its INI/MAC through ueventd, which searches /etc/firmware
+# first (then /odm, /vendor, /firmware/image). /etc is the ramdisk tmpfs, so
+# staging here needs no writable /vendor and survives TWRP mounting it read-only.
+# Keep the path short: the module copies fwpath into a small fixed buffer and
+# finit_module fails with ENOSPC ("No space left on device") for long values.
+fwstage=/etc/firmware
+mkdir -p "$fwstage"
+log "firmware staging at $fwstage"
+
 prepare_mac() {
     mac_hex=$(tr ' ' '\n' < /proc/cmdline |
         sed -n 's/^wifimacaddr=\([0-9A-Fa-f:]*\).*/\1/p' | head -n 1 | tr -d ':')
@@ -87,8 +96,9 @@ prepare_mac() {
 
     cfg_src=$vendor_tmp/etc/wifi/qca6490/WCNSS_qcom_cfg.ini
     [ -e "$cfg_src" ] || { log "WCNSS_qcom_cfg.ini not found"; return 1; }
-    cfg=/vendor/etc/wifi/qca6490/WCNSS_qcom_cfg.ini
-    mkdir -p /vendor/etc/wifi/qca6490
+    fwdir=$fwstage/wlan/qca_cld/qca6490
+    mkdir -p "$fwdir"
+    cfg=$fwdir/WCNSS_qcom_cfg.ini
     added=
     while IFS= read -r line; do
         if [ -z "$added" ] && [ "$line" = "END" ]; then
@@ -105,19 +115,16 @@ prepare_mac() {
     printf 'Intf0MacAddress=%s\nEND\n' "$mac_hex" \
         > /mnt/vendor/persist/qca6490/wlan_mac.bin
 
-    # qca_cld3 reads its INI and MAC file through the firmware loader. In stock
-    # Android these live in /vendor/firmware/wlan/qca_cld/qca6490 (the vendor
-    # image only carries symlinks into /vendor/etc and /mnt/vendor/persist).
-    # /vendor here is a tmpfs, so materialise the same layout in RAM; the
-    # private vendor mount is not needed after this point.
-    fwdir=/vendor/firmware/wlan/qca_cld/qca6490
-    mkdir -p "$fwdir"
-    cp "$cfg" "$fwdir/WCNSS_qcom_cfg.ini"
-    cp /mnt/vendor/persist/qca6490/wlan_mac.bin "$fwdir/wlan_mac.bin"
+    # Every step is checked: a silent failure here leaves the driver on a random
+    # MAC, which is invisible until two devices collide on one AP.
+    [ -s "$cfg" ] || { log "FAILED to stage WCNSS_qcom_cfg.ini"; return 1; }
+    cp /mnt/vendor/persist/qca6490/wlan_mac.bin "$fwdir/wlan_mac.bin" ||
+        { log "FAILED to stage wlan_mac.bin"; return 1; }
     chmod 0644 "$fwdir/WCNSS_qcom_cfg.ini"
     chmod 0666 "$fwdir/wlan_mac.bin"
+    [ -s "$fwdir/wlan_mac.bin" ] || { log "FAILED: staged MAC file is empty"; return 1; }
 
-    log "prepared stable MAC $mac_hex"
+    log "prepared stable MAC $mac_hex in $fwdir"
 }
 
 prepare_mac || true
@@ -168,12 +175,12 @@ fi
 # fwpath explicitly: the module default is empty, and qca_cld3 then cannot
 # find the INI/MAC files we staged under /vendor/firmware.
 if [ -e /sys/module/qca_cld3_qca6490/parameters/fwpath ]; then
-    echo /vendor/firmware > /sys/module/qca_cld3_qca6490/parameters/fwpath 2>/dev/null
+    echo "$fwstage" > /sys/module/qca_cld3_qca6490/parameters/fwpath 2>/dev/null
 fi
 if grep -q "^qca_cld3_qca6490 " /proc/modules; then
     log "qca_cld3 already loaded"
 else
-    if insmod "$modules/qca_cld3_qca6490.ko" fwpath=/vendor/firmware 2>>"$LOG"; then
+    if insmod "$modules/qca_cld3_qca6490.ko" fwpath="$fwstage" 2>>"$LOG"; then
         log "loaded qca_cld3"
     else
         log "insmod qca_cld3 failed"
