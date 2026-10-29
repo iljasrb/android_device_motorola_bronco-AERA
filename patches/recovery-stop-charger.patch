@@ -1,0 +1,16 @@
+diff --git a/etc/init.rc b/etc/init.rc
+index 96e0a078..2a1a97d8 100644
+--- a/etc/init.rc
++++ b/etc/init.rc
+@@ -131,8 +131,11 @@ service console /system/bin/sh
+ on init && property:ro.debuggable=1
+     start console
+ 
++# Not started in recovery: charger polls the health HAL every second and there is
++# none in the recovery ramdisk, so each attempt blocks for a second.
+ service charger /system/bin/charger
+     critical
++    disabled
+     seclabel u:r:charger:s0
+     user root
+ 

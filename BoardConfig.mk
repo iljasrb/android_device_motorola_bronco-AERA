@@ -203,7 +203,11 @@ AERA_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
 #
 # AERA's backend tests this flag for the literal value 1 (not "true"), and no
 # health HAL is registered in recovery, so keep it numeric.
+# Recovery has no health HAL on bronco; the HIDL lookup blocks for a second per
+# call inside the UI thread. Use the sysfs battery path instead.
+OF_USE_LEGACY_BATTERY_SERVICES := 1
 AERA_USE_LEGACY_BATTERY_SERVICES := 1
+TW_USE_LEGACY_BATTERY_SERVICES := true
 
 # Flashlight: two nodes, ORDER MATTERS -- torch first, switch second.
 # leds-qti-flash only lets qti_flash_switch_enable() act on a channel after a
