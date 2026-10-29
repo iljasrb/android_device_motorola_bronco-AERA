@@ -1,5 +1,5 @@
 diff --git a/aeraui/core/runner.cpp b/aeraui/core/runner.cpp
-index 04582358..a4a11077 100644
+index 04582358..66eb00e0 100644
 --- a/aeraui/core/runner.cpp
 +++ b/aeraui/core/runner.cpp
 @@ -4,6 +4,7 @@
@@ -26,7 +26,27 @@ index 04582358..a4a11077 100644
  #include <android/log.h>
  #include <minuitwrp/minui.h>
  
-@@ -583,7 +586,17 @@ RunResult RunLoop(bool fastboot_mode = false,
+@@ -289,7 +292,18 @@ bool HandleEvent(Engine& engine, InteractionBoost& performance,
+         return false;
+     }
+     if (event.type == EV_ABS) {
+-        if (hardware.screen_off) return false;
++        if (hardware.screen_off) {
++            // A touch is a wake gesture: without this the display only woke on
++            // a hardware key, so the screen looked dead to touch.
++            if (!engine.WakeForOperation()) {
++                engine.ShowLockScreen();
++                engine.SetSuspended(false);
++            }
++            aeraScreenTimer.Wake();
++            performance.Boost();
++            hardware.screen_off = false;
++            return false;  // swallow the waking contact
++        }
+         performance.Boost();
+         aeraScreenTimer.Wake();
+         PointerEvent pointer;
+@@ -583,7 +597,17 @@ RunResult RunLoop(bool fastboot_mode = false,
                      __android_log_print(ANDROID_LOG_INFO, kLogTag,
                                          "live fastbootd mode active");
                  } else {
@@ -45,7 +65,7 @@ index 04582358..a4a11077 100644
                  }
                  gModeTransitionBusy.store(false, std::memory_order_release);
                  continue;
-@@ -740,6 +753,21 @@ DecryptionResult RunAeraUiDecryption(int credential_type,
+@@ -740,6 +764,21 @@ DecryptionResult RunAeraUiDecryption(int credential_type,
  }
  
  RunResult RunAeraUi(const DisplayMetrics& metrics) {
