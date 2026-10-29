@@ -123,6 +123,16 @@ prepare_mac() {
 prepare_mac || true
 
 # cnss-daemon needs its socket directory before it can bind cnss_user_server.
+# Never let it touch real /data: files created here carry recovery's SELinux
+# label, and Android's cnss-daemon is then denied unlinking the stale socket
+# ("Address already in use"), which kills Wi-Fi until /data is wiped. Put a
+# tmpfs over the directory so the sockets vanish with this boot.
+# Heal entries left behind by older builds: Android recreates both directories
+# with the right label and ownership on its next boot. Runs before the tmpfs,
+# which would otherwise hide them.
+rm -rf /data/vendor/wifi/sockets /data/vendor/wifi/wpa 2>/dev/null
+mkdir -p /data/vendor/wifi
+grep -q ' /data/vendor/wifi ' /proc/mounts || mount -t tmpfs tmpfs /data/vendor/wifi 2>>"$LOG"
 mkdir -p /data/vendor/wifi/sockets /data/vendor/wifi/wpa/sockets
 chown -R system:system /data/vendor/wifi
 chmod 0770 /data/vendor/wifi/sockets
