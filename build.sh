@@ -95,6 +95,12 @@ grep -q 'kLocalPackage' "$recovery_mod/twrpinstall/adb_install.cpp" ||
 grep -q 'ReleaseVendorMountsForInstall' "$recovery_mod/aeraui/platform/aera_backend.cpp" ||
     git -C "$recovery_mod" apply "$root_dir/patches/recovery-release-vendor-mounts.patch"
 
+# A VAB ROM install lands on the inactive slot; nothing boots it until the
+# bootloader is told. update_engine switches the slot itself, but a zip install
+# driven through TWRP's installer needs the same step.
+grep -q 'AERA install: switching active slot' "$recovery_mod/twrpinstall/twinstall.cpp" ||
+    git -C "$recovery_mod" apply "$root_dir/patches/twinstall-switch-slot-after-ota.patch"
+
 # make_f2fs leaves userdata checkpoint-disabled, so every write made in a
 # recovery session was rolled back on the next boot (settings, backups).
 grep -q 'checkpoint=enable' "$recovery_mod/partition.cpp" ||

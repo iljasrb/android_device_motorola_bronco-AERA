@@ -1,0 +1,20 @@
+diff --git a/twrpinstall/twinstall.cpp b/twrpinstall/twinstall.cpp
+index 8cfb57d4..ebf69484 100755
+--- a/twrpinstall/twinstall.cpp
++++ b/twrpinstall/twinstall.cpp
+@@ -936,6 +936,15 @@ static int InstallZipImpl(const char *path, int *wipe_cache, bool check_for_dige
+ 				PartitionManager.Prepare_All_Super_Volumes();
+ 				gui_warn("mount_vab_partitions=Devices on super may not mount until after rebooting recovery.");
+ 			}
++			// A VAB ROM install lands on the inactive slot, so nothing would
++			// boot it while the bootloader still points at the old one. Switch
++			// only after a successful install, the way update_engine does.
++			if (ret_val == INSTALL_SUCCESS) {
++				const std::string installed =
++				    PartitionManager.Get_Active_Slot_Display() == "A" ? "B" : "A";
++				LOGINFO("AERA install: switching active slot to %s\n", installed.c_str());
++				PartitionManager.Set_Active_Slot(installed);
++			}
+ 			gui_warn("flash_ab_reboot=To flash additional zips, please reboot recovery to switch to the updated slot.");
+ 			}
+ 		} else {
