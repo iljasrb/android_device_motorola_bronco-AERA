@@ -171,7 +171,20 @@ while ! grep -q ' /data ' /proc/mounts && [ "$i" -lt 300 ]; do
     i=$((i + 1))
 done
 mkdir -p /data/misc/gatekeeper
-chown system:system /data/misc/gatekeeper
+# A freshly formatted /data has no /data/misc, so mkdir creates it as
+# root:root 0700 with an unlabeled context. uid system can then not traverse it:
+# gatekeeperd cannot chdir (CE decrypt never runs) and Android's first boot
+# cannot create /data/misc_de, which leaves the device unable to boot at all.
+# Repair only the shape recovery itself can create (root-owned after a format);
+# an Android-owned /data/misc is left alone because Android uses system:misc
+# with the sticky bit.
+if [ "$(stat -c %u /data/misc 2>/dev/null)" = "0" ]; then
+    chown system:system /data/misc
+    chmod 0770 /data/misc
+fi
+[ "$(stat -c %u /data/misc/gatekeeper 2>/dev/null)" = "0" ] &&
+    chown system:system /data/misc/gatekeeper
+restorecon /data/misc /data/misc/gatekeeper 2>/dev/null
 setprop ctl.restart gatekeeperd
 
 # WLAN is brought up only after /data is mounted: bringing the QCA6490 up
