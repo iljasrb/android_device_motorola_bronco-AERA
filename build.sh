@@ -50,9 +50,13 @@ grep -q 'filtered_params' "$ks2/src/utils.rs" ||
 
 # Recovery resolves HIDL to passthrough; ENFORCE_VINTF_MANIFEST rejects the
 # gatekeeper registration and the vendor HAL is unreachable.
+#
+# SECURITY: this disables a VINTF manifest check in libhidl. It is required for
+# gatekeeper passthrough in recovery; never widen it beyond libhidl's default
+# cflags block.
 hidl="$aera_dir/system/libhidl"
 grep -q 'libhidl still resolves' "$hidl/Android.bp" ||
-    git -C "$hidl" apply "$root_dir/patches/libhidl-disable-enforce-vintf.patch"
+    git -C "$hidl" apply "$root_dir/patches/libhidl-recovery-passthrough-no-vintf-enforce.patch"
 
 # fastbootd resolves health/fastboot HALs while USB is still closed; recovery has
 # neither, so the blocking waits hang the daemon and USB never re-enumerates.
@@ -95,6 +99,15 @@ grep -q 'ReleaseVendorMountsForInstall' "$recovery_mod/aeraui/platform/aera_back
 # recovery session was rolled back on the next boot (settings, backups).
 grep -q 'checkpoint=enable' "$recovery_mod/partition.cpp" ||
     git -C "$recovery_mod" apply "$root_dir/patches/recovery-userdata-checkpoint.patch"
+
+# A blanked screen ignored touch: every evdev ABS event was dropped while
+# screen_off was set, and only hardware keys cleared it.
+grep -q 'A touch is a wake gesture' "$recovery_mod/aeraui/core/runner.cpp" ||
+    git -C "$recovery_mod" apply "$root_dir/patches/aeraui-touch-wake.patch"
+
+# The transition animation is UI-only; its removal is unrelated to fastbootd.
+grep -q 'Keep the hand-off short and deliberately simple' "$recovery_mod/aeraui/components/power_transition.cpp" ||
+    git -C "$recovery_mod" apply "$root_dir/patches/aeraui-power-transition-simplify.patch"
 
 # The UI autosaves during startup, before /data is necessarily mounted; without
 # a load-first guard those session defaults overwrite the stored preferences.

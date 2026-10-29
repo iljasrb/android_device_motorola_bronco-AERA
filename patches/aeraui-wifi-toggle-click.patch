@@ -1,6 +1,8 @@
+diff --git a/aeraui/scenes/wifi_scene.cpp b/aeraui/scenes/wifi_scene.cpp
+index 70552e1d..682cf21a 100644
 --- a/aeraui/scenes/wifi_scene.cpp
 +++ b/aeraui/scenes/wifi_scene.cpp
-@@ -1125,6 +1125,9 @@
+@@ -1135,6 +1135,9 @@ WifiScene BuildWifiScene(lv_obj_t *screen, ActionCallback callback, void *contex
    state->radio_switch = lv_switch_create(state->scene.toggle);
    StyleSwitch(state->radio_switch, false);
    lv_obj_align(state->radio_switch, LV_ALIGN_RIGHT_MID, -22, 0);

@@ -1,8 +1,8 @@
 diff --git a/wlan.cpp b/wlan.cpp
-index a248132f..82cf0fe6 100644
+index a248132f..de72ad49 100644
 --- a/wlan.cpp
 +++ b/wlan.cpp
-@@ -1154,39 +1154,84 @@ bool Wlan::StartSupplicant() {
+@@ -1154,39 +1275,84 @@ bool Wlan::StartSupplicant() {
  }
  
  bool Wlan::PrepareStableMacFirmware() {

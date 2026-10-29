@@ -1,18 +1,8 @@
 diff --git a/aeraui/platform/aera_backend.cpp b/aeraui/platform/aera_backend.cpp
-index 7176b32f..98a8cebc 100644
+index 7176b32f..bf6cc34a 100644
 --- a/aeraui/platform/aera_backend.cpp
 +++ b/aeraui/platform/aera_backend.cpp
-@@ -55,7 +55,9 @@
- 
- #include <cutils/properties.h>
- #include <private/android_filesystem_config.h>
-+#include <android-base/file.h>
- #include <android-base/properties.h>
-+#include <android-base/strings.h>
- 
- #include "data.hpp"
- #include "aera_flash_log.hpp"
-@@ -2006,8 +2037,59 @@ static int RecoveryRunJobImpl(const JobRequest &request) {
+@@ -2006,8 +2035,45 @@ static int RecoveryRunJobImpl(const JobRequest &request) {
        property_set("sys.usb.config", "none");
        usleep(300000);
      }
@@ -26,23 +16,9 @@ index 7176b32f..98a8cebc 100644
 +        property_set("ctl.stop", service);
 +      }
 +    }
-+    // TWRP's Format_Data unmaps every dynamic partition first and aborts with
-+    // "Unable to unmap dynamic partitions" while any dm-backed mount is busy
-+    // (recovery itself maps /vendor libraries). Detach those mounts lazily: the
-+    // holders keep their inodes, but the mount no longer blocks the unmap.
-+    {
-+      std::string mounts;
-+      if (android::base::ReadFileToString("/proc/mounts", &mounts)) {
-+        for (const auto &line : android::base::Split(mounts, "\n")) {
-+          const auto fields = android::base::Split(line, " ");
-+          if (fields.size() < 2) continue;
-+          if (fields[0].compare(0, 15, "/dev/block/dm-") != 0) continue;
-+          if (fields[1] == "/data") continue;
-+          if (umount2(fields[1].c_str(), MNT_DETACH) == 0)
-+            LOGINFO("AERA format: detached dynamic mount %s\n", fields[1].c_str());
-+        }
-+      }
-+    }
++    // dm-backed mounts (vendor, vendor_dlkm, metadata) stay attached: detaching
++    // them lazily does not help Format_Data, so the pending-format restart below
++    // is what makes the wipe succeed.
 +    for (int attempt = 0; attempt < 25; ++attempt) {
 +      if (!PartitionManager.Is_Mounted_By_Path("/data")) break;
 +      PartitionManager.UnMount_By_Path("/data", true);
@@ -73,31 +49,3 @@ index 7176b32f..98a8cebc 100644
      PartitionManager.Update_System_Details();
      TWFunc::SetPerformanceMode(false);
      if (restore_fastboot) property_set("sys.usb.config", "fastboot");
-@@ -3394,6 +3476,17 @@ bool WriteFileAtomically(const std::string& path, const std::string& contents) {
-     unlink(temporary.c_str());
-     return false;
-   }
-+  // The rename lives in the parent directory: fsync it so the new entry is on
-+  // disk before a reboot, and push a checkpoint for the whole filesystem.
-+  const auto slash = path.find_last_of('/');
-+  const std::string parent = slash == std::string::npos ? "." : path.substr(0, slash);
-+  const int dir = open(parent.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-+  if (dir >= 0) {
-+    // Only the directory entry is flushed here; a syncfs() of the whole
-+    // filesystem stalls the UI thread on large partitions.
-+    fsync(dir);
-+    close(dir);
-+  }
-   chmod(path.c_str(), 0600);
-   aera::shared_storage::Normalize(path);
-   return true;
-@@ -3550,6 +3643,9 @@ void LoadEarlyUiPreferencesIfAvailable() {
- }
- 
- void LoadAeraPreferencesIfAvailable() {
-+  // A checkpoint-disabled userdata mounts an old checkpoint, so recovery sees
-+  // stale content and drops its own writes at the next boot. This runs on every
-+  // startup path, whichever component mounted /data first.
-   // Fastboot over Wi-Fi grants destructive partition access and is therefore
-   // intentionally session-only. Remember paired computers, but require an
-   // explicit opt-in after every recovery process start.

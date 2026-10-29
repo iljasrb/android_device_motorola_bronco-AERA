@@ -1,3 +1,5 @@
+diff --git a/wlan.cpp b/wlan.cpp
+index a248132f..de72ad49 100644
 --- a/wlan.cpp
 +++ b/wlan.cpp
 @@ -8,10 +8,16 @@
@@ -17,7 +19,7 @@
  #include <sys/stat.h>
  #include <sys/types.h>
  #include <unistd.h>
-@@ -74,6 +80,113 @@
+@@ -74,6 +80,113 @@ static constexpr int WLAN_SUPP_READY_TIMEOUT_MS = 60000;
   * wrapper (mondrian_wlan_up.sh); it is now native init builtins. */
  static const char* WLAN_SUPP_PREP_PROP = "sys.aera.wlan.up";
  
@@ -131,7 +133,7 @@
  static int HexDigitValue(char value) {
      if (value >= '0' && value <= '9') return value - '0';
      if (value >= 'a' && value <= 'f') return value - 'a' + 10;
-@@ -966,6 +1079,12 @@
+@@ -966,6 +1079,12 @@ bool Wlan::InfoLocked()
          DataManager::SetValue("wlan_connected_name", ssid);
          DataManager::SetValue("wlan_info_text", "Connected: " + ssid + "  IP: " + ip_addr);
  
@@ -144,24 +146,24 @@
          return true;
      }
  
-@@ -1011,18 +1130,20 @@
+@@ -1011,18 +1130,20 @@ bool Wlan::TestConnection()
          return true;
      }
  
 -    std::string busybox = GetBusyboxBinary();
 -    if (busybox.empty())
 -        busybox = "busybox";
--
--    std::string internet_output;
--    bool internet_ok = RunCommand(busybox + " ping -c 1 -w 4 1.1.1.1 2>&1", internet_output);
 +    std::string internet_detail;
 +    const bool internet_ok = ProbeTcp("1.1.1.1", "443", &internet_detail);
  
--    std::string dns_output;
--    bool dns_ok = RunCommand(busybox + " ping -c 1 -w 4 bing.com 2>&1", dns_output);
+-    std::string internet_output;
+-    bool internet_ok = RunCommand(busybox + " ping -c 1 -w 4 1.1.1.1 2>&1", internet_output);
 +    std::string dns_detail;
 +    const bool dns_ok = ResolveHostname("bing.com", &dns_detail);
  
+-    std::string dns_output;
+-    bool dns_ok = RunCommand(busybox + " ping -c 1 -w 4 bing.com 2>&1", dns_output);
+-
 -    LOGINFO("WLAN test internet output:\n%s\n", internet_output.c_str());
 -    LOGINFO("WLAN test DNS output:\n%s\n", dns_output.c_str());
 +    LOGINFO("WLAN test internet (1.1.1.1:443): %s%s%s\n",

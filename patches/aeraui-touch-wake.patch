@@ -1,0 +1,24 @@
+diff --git a/aeraui/core/runner.cpp b/aeraui/core/runner.cpp
+index 04582358..66eb00e0 100644
+--- a/aeraui/core/runner.cpp
++++ b/aeraui/core/runner.cpp
+@@ -289,7 +292,18 @@ bool HandleEvent(Engine& engine, InteractionBoost& performance,
+         return false;
+     }
+     if (event.type == EV_ABS) {
+-        if (hardware.screen_off) return false;
++        if (hardware.screen_off) {
++            // A touch is a wake gesture: without this the display only woke on
++            // a hardware key, so the screen looked dead to touch.
++            if (!engine.WakeForOperation()) {
++                engine.ShowLockScreen();
++                engine.SetSuspended(false);
++            }
++            aeraScreenTimer.Wake();
++            performance.Boost();
++            hardware.screen_off = false;
++            return false;  // swallow the waking contact
++        }
+         performance.Boost();
+         aeraScreenTimer.Wake();
+         PointerEvent pointer;

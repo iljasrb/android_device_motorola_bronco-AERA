@@ -1,8 +1,8 @@
 diff --git a/aeraui/platform/aera_backend.cpp b/aeraui/platform/aera_backend.cpp
-index 7176b32f..98a8cebc 100644
+index 7176b32f..bf6cc34a 100644
 --- a/aeraui/platform/aera_backend.cpp
 +++ b/aeraui/platform/aera_backend.cpp
-@@ -147,6 +149,9 @@ std::string SessionLanguageOr(const std::string &stored) {
+@@ -147,6 +147,9 @@ std::string SessionLanguageOr(const std::string &stored) {
  }
  bool WriteFileAtomically(const std::string &path, const std::string &contents);
  kernel::Settings gDeveloperSettings;
@@ -12,7 +12,35 @@ index 7176b32f..98a8cebc 100644
  bool SaveAeraPreferences(bool require_early = false);
  bool ResetAeraSettings(bool theme);
  bool ResetAeraThemeSection(ThemeSection section);
-@@ -3568,11 +3664,17 @@ void LoadAeraPreferencesIfAvailable() {
+@@ -3394,6 +3460,17 @@ bool WriteFileAtomically(const std::string& path, const std::string& contents) {
+     unlink(temporary.c_str());
+     return false;
+   }
++  // The rename lives in the parent directory: fsync it so the new entry is on
++  // disk before a reboot, and push a checkpoint for the whole filesystem.
++  const auto slash = path.find_last_of('/');
++  const std::string parent = slash == std::string::npos ? "." : path.substr(0, slash);
++  const int dir = open(parent.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
++  if (dir >= 0) {
++    // Only the directory entry is flushed here; a syncfs() of the whole
++    // filesystem stalls the UI thread on large partitions.
++    fsync(dir);
++    close(dir);
++  }
+   chmod(path.c_str(), 0600);
+   aera::shared_storage::Normalize(path);
+   return true;
+@@ -3550,6 +3627,9 @@ void LoadEarlyUiPreferencesIfAvailable() {
+ }
+ 
+ void LoadAeraPreferencesIfAvailable() {
++  // A checkpoint-disabled userdata mounts an old checkpoint, so recovery sees
++  // stale content and drops its own writes at the next boot. This runs on every
++  // startup path, whichever component mounted /data first.
+   // Fastboot over Wi-Fi grants destructive partition access and is therefore
+   // intentionally session-only. Remember paired computers, but require an
+   // explicit opt-in after every recovery process start.
+@@ -3568,11 +3648,17 @@ void LoadAeraPreferencesIfAvailable() {
        !shared_repair_started.exchange(true)) {
      std::thread([] { aera::shared_storage::NormalizeAll(); }).detach();
    }
@@ -32,7 +60,7 @@ index 7176b32f..98a8cebc 100644
  
    EarlyUiPreferences full_ui = gEarlyDefaults;
    std::string line;
-@@ -3631,11 +3733,18 @@ void LoadAeraPreferencesIfAvailable() {
+@@ -3631,11 +3717,18 @@ void LoadAeraPreferencesIfAvailable() {
    ApplyEarlyUiSideEffects();
    if (!SaveEarlyUiPreferences()) LOGERR("AERA: could not refresh the early UI preference cache.\n");
    if (!SaveEarlyWifiPreferences()) LOGERR("AERA: could not refresh the early WLAN cache.\n");
