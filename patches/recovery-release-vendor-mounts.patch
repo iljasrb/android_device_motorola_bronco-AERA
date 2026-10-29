@@ -1,8 +1,32 @@
 diff --git a/aeraui/platform/aera_backend.cpp b/aeraui/platform/aera_backend.cpp
-index 7176b32f..bf6cc34a 100644
+index 7176b32f..1ac2fe06 100644
 --- a/aeraui/platform/aera_backend.cpp
 +++ b/aeraui/platform/aera_backend.cpp
-@@ -1198,12 +1201,37 @@ bool RecoveryCancelSideload() {
+@@ -701,6 +704,10 @@ bool RecoveryDataLocked() {
+          DataManager::GetIntValue(TW_IS_DECRYPTED) == 0;
+ }
+ 
++// Defined below: the installers and the live fastbootd hand-off both need the
++// same lazy release of the dm-backed /vendor and /vendor_dlkm mounts.
++void ReleaseVendorMountsForInstall();
++
+ bool RecoveryEnterFastbootd() {
+   aera::mobile::StorageLease mobile_lease;
+   if (!mobile_lease) return false;
+@@ -720,6 +727,12 @@ bool RecoveryEnterFastbootd() {
+   TWFunc::Toggle_MTP(false);
+   property_set("sys.usb.config", "none");
+   usleep(200000);
++  // Unmap_Super_Devices() fails while the dm-backed /vendor or /vendor_dlkm are
++  // mounted, and recovery maps them for the whole boot once a vendor service
++  // has loaded its libraries. Release them the same way the installers do:
++  // lazily, so the running services keep their mappings. Without this every
++  // live entry fell back to a cold reboot.
++  ReleaseVendorMountsForInstall();
+   if (!PartitionManager.Unmap_Super_Devices(true)) {
+     LOGERR("AERA live fastbootd: could not release dynamic partitions.\n");
+     PartitionManager.Setup_Super_Devices();
+@@ -1198,12 +1211,37 @@ bool RecoveryCancelSideload() {
    return CancelAdbSideload();
  }
  
@@ -40,7 +64,7 @@ index 7176b32f..bf6cc34a 100644
    Device::BuiltinAction reboot_action = Device::REBOOT_BOOTLOADER;
    const int result = twrp_sideload(
        "/", &reboot_action, [](uint64_t received, uint64_t total) {
-@@ -1245,6 +1273,7 @@ int RecoveryRunJob(const JobRequest &request) {
+@@ -1245,6 +1283,7 @@ int RecoveryRunJob(const JobRequest &request) {
      gui_err("Finish or cancel background plugin storage tasks first.\n");
      return 1;
    }

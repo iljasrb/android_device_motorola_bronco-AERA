@@ -65,6 +65,22 @@ slots from inside recovery and reboots.
   before installing, never after — erasing `/metadata` destroys the staged slot.
 - Wi-Fi runs from RAM; `/vendor` is released after boot so zips that mount it work.
 
+## Ramdisk scripts
+
+The behaviour that matters most on this device lives in `recovery/root/system/bin`,
+not in `patches/`. Each hook exists because of a specific failure; keep that link
+when changing one.
+
+| script | trigger | what it does / failure it prevents |
+|---|---|---|
+| `crypto-start.sh` | init, before the crypto chain | Runs `aera-format-pending.sh take` first, then starts gatekeeperd/keystore2 in the order KeyMint needs. Ordering here is what makes password decryption work. |
+| `aera-format-pending.sh` | `mark` from the UI, `take` from `crypto-start.sh` | `mark` leaves `/metadata/aera-format-pending` and restarts recovery; `take` formats raw userdata before `dm-default-key` exists, zeroes `/metadata`, and mounts once with checkpoints enabled. Needed because `mkfs.f2fs` cannot take a mapped partition. |
+| `wlan-start.sh` | `crypto-start.sh`, after `/data` is ready | Mounts vendor/vendor_dlkm privately, stages config + `wlan_mac.bin` on tmpfs, loads `qca_cld3`, releases those mounts, then brings `wlan0` up. Sockets live on a tmpfs over `/data/vendor/wifi` — writing them into real `/data` left unlabeled files that stop Android's `cnss-daemon` and killed Wi-Fi until a data wipe. |
+| `release-mounts.sh` | `setprop aera.release.mounts 1` | Lazily detaches `/vendor` and `/vendor_dlkm` so TWRP can unmap super for installs and fastbootd. Must not stop the Wi-Fi stack. |
+| `spss-start.sh` | init, early | Brings up spss/spdaemon and bind-mounts `/mnt/vendor/persist` to `/persist`; never unmounts the NVM partition under its owners. |
+| `ssgtzd-start.sh` | init, early | Starts the storage security daemon; it pins `/vendor`, which is why the release hook exists. |
+| `prepdecrypt.sh`, `mtp-fallback.sh` | init / USB events | Pre-decrypt prep and MTP fallback to the legacy USB function. |
+
 ## Layout
 
 ```

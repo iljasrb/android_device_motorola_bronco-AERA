@@ -1,8 +1,8 @@
 diff --git a/aeraui/platform/aera_backend.cpp b/aeraui/platform/aera_backend.cpp
-index 7176b32f..bf6cc34a 100644
+index 7176b32f..1ac2fe06 100644
 --- a/aeraui/platform/aera_backend.cpp
 +++ b/aeraui/platform/aera_backend.cpp
-@@ -2006,8 +2035,45 @@ static int RecoveryRunJobImpl(const JobRequest &request) {
+@@ -2006,8 +2045,45 @@ static int RecoveryRunJobImpl(const JobRequest &request) {
        property_set("sys.usb.config", "none");
        usleep(300000);
      }

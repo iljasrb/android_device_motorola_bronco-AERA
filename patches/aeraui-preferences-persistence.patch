@@ -1,5 +1,5 @@
 diff --git a/aeraui/platform/aera_backend.cpp b/aeraui/platform/aera_backend.cpp
-index 7176b32f..bf6cc34a 100644
+index 7176b32f..1ac2fe06 100644
 --- a/aeraui/platform/aera_backend.cpp
 +++ b/aeraui/platform/aera_backend.cpp
 @@ -147,6 +147,9 @@ std::string SessionLanguageOr(const std::string &stored) {
@@ -12,7 +12,7 @@ index 7176b32f..bf6cc34a 100644
  bool SaveAeraPreferences(bool require_early = false);
  bool ResetAeraSettings(bool theme);
  bool ResetAeraThemeSection(ThemeSection section);
-@@ -3394,6 +3460,17 @@ bool WriteFileAtomically(const std::string& path, const std::string& contents) {
+@@ -3394,6 +3470,17 @@ bool WriteFileAtomically(const std::string& path, const std::string& contents) {
      unlink(temporary.c_str());
      return false;
    }
@@ -30,7 +30,7 @@ index 7176b32f..bf6cc34a 100644
    chmod(path.c_str(), 0600);
    aera::shared_storage::Normalize(path);
    return true;
-@@ -3550,6 +3627,9 @@ void LoadEarlyUiPreferencesIfAvailable() {
+@@ -3550,6 +3637,9 @@ void LoadEarlyUiPreferencesIfAvailable() {
  }
  
  void LoadAeraPreferencesIfAvailable() {
@@ -40,7 +40,7 @@ index 7176b32f..bf6cc34a 100644
    // Fastboot over Wi-Fi grants destructive partition access and is therefore
    // intentionally session-only. Remember paired computers, but require an
    // explicit opt-in after every recovery process start.
-@@ -3568,11 +3648,17 @@ void LoadAeraPreferencesIfAvailable() {
+@@ -3568,11 +3658,17 @@ void LoadAeraPreferencesIfAvailable() {
        !shared_repair_started.exchange(true)) {
      std::thread([] { aera::shared_storage::NormalizeAll(); }).detach();
    }
@@ -60,7 +60,7 @@ index 7176b32f..bf6cc34a 100644
  
    EarlyUiPreferences full_ui = gEarlyDefaults;
    std::string line;
-@@ -3631,11 +3717,18 @@ void LoadAeraPreferencesIfAvailable() {
+@@ -3631,11 +3727,18 @@ void LoadAeraPreferencesIfAvailable() {
    ApplyEarlyUiSideEffects();
    if (!SaveEarlyUiPreferences()) LOGERR("AERA: could not refresh the early UI preference cache.\n");
    if (!SaveEarlyWifiPreferences()) LOGERR("AERA: could not refresh the early WLAN cache.\n");

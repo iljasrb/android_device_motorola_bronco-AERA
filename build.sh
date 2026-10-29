@@ -93,7 +93,7 @@ grep -q 'kLocalPackage' "$recovery_mod/twrpinstall/adb_install.cpp" ||
 # Recovery pins /vendor for the boot once its libraries are mapped; the zip
 # installer refuses to run until /vendor is unmounted. Release it before install.
 grep -q 'ReleaseVendorMountsForInstall' "$recovery_mod/aeraui/platform/aera_backend.cpp" ||
-    git -C "$recovery_mod" apply "$root_dir/patches/recovery-release-vendor-before-install.patch"
+    git -C "$recovery_mod" apply "$root_dir/patches/recovery-release-vendor-mounts.patch"
 
 # make_f2fs leaves userdata checkpoint-disabled, so every write made in a
 # recovery session was rolled back on the next boot (settings, backups).
