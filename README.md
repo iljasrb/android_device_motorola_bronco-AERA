@@ -18,7 +18,25 @@ Device tree for [AERA Recovery](https://github.com/AERA-Recovery) `aera-16.0`
 | Install | Zip from internal storage or ADB sideload, ROM OTAs with dynamic partitions (virtual A/B) |
 | Connectivity | adb, MTP (FunctionFS), Wi-Fi (QCA6490) with zip installs while connected |
 | fastbootd | `getvar`, physical + logical partitions, `fetch`, live and cold entry |
+| Security | Screen-lock PIN/password, FRP wipe |
 | Extras | Root manager (KernelSU family), terminal, plugin store, flashlight, haptics |
+| Rendering | Adreno 730 via KGSL + EGL/GLES, software LVGL fallback |
+| Audio | Silent fallback; no DSP soundcard in recovery yet |
+
+GPU rendering ships the Adreno userspace in the ramdisk: `libEGL_adreno.so`,
+`libGLESv2_adreno.so`, `libgsl.so`, `libadreno_utils.so`, `libllvm-glnext.so`,
+the `eglSubDriverAndroid.so` platform subdriver with the graphics
+mapper/allocator interface libraries it links against, kgsl's GMU firmware
+(`vendor/firmware/gmu_gen70000.bin`), the Adreno 730 SQE/ZAP firmware
+(`a730_sqe.fw`, `a730_zap.*`) and the platform `libui`/`libnativewindow` built
+into the ramdisk by `device.mk`. The SQE/ZAP firmware is staged under
+`/system/etc/firmware` (visible as `/etc/firmware`) because KGSL requests it
+during first-stage init, before `spss-start.sh` mounts `/firmware`, and a later
+`/vendor` mount would hide a copy under `/vendor/firmware`. The renderer composites into a pbuffer
+and copies the frame into minui's DRM scanout buffer, so no gralloc allocation,
+mapper service or allocator service is involved. The vendor libraries are the
+proprietary blobs from the installed Motorola Android 17 vendor partition;
+refresh them from a vendor dump after a ROM update.
 
 ## Requirements
 
@@ -35,8 +53,16 @@ AERA_DIR=~/aera_16.0 ./build.sh
 patches from `patches/` to the AOSP repositories, and runs
 `lunch twrp_bronco-bp2a-eng && mka adbd recoveryimage`.
 
-Output: `$AERA_DIR/out/target/product/bronco/AERA-R1.0-Beta-Official-bronco.img`
-(installer zip alongside it).
+Useful options: `--patches-only` installs the tree and applies patches without
+building, `--clean` removes the AERA `out/` tree first, `--ccache` enables
+ccache when installed, `--jobs N` overrides the build parallelism, and `--sync`
+runs `repo sync` first when the `repo` tool is available. The device tree is
+installed with `rsync` when present, so unchanged files keep their timestamps
+and incremental builds only rebuild what changed.
+
+Output: `$AERA_DIR/out/target/product/bronco/AERA-R1.0-Beta-Unofficial-bronco.img`
+(installer zip alongside it). The status segment follows `AERA_BUILD_STATUS`
+from `vendorsetup.sh`; `Official` only appears when that is set explicitly.
 
 ## Flash
 
@@ -64,6 +90,12 @@ slots from inside recovery and reboots.
 - ROM installs are staged as virtual-A/B snapshots. Wipe `userdata`/`metadata`
   before installing, never after — erasing `/metadata` destroys the staged slot.
 - Wi-Fi runs from RAM; `/vendor` is released after boot so zips that mount it work.
+- Audio output is not implemented: the browser/media plugins use the silent
+  fallback. The DSP audio protection domain does not start and the recovery DTB
+  lacks the sound machine/codec nodes; see `TODO.md`.
+- The FRP wipe row is compiled in (`AERA_ENABLE_FRP_WIPE := 1`) but unselected
+  by default. It writes the raw `frp` block device and fails closed if the
+  bootloader protects it.
 
 ## Ramdisk scripts
 

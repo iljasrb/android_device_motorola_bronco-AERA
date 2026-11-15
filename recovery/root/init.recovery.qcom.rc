@@ -42,6 +42,11 @@ on early-init
 
 on init
     setprop sys.usb.configfs 1
+    # The ROM's gralloc/mapper libraries are built against a newer libc++ and
+    # reference std::__1::__hash_memory, which the recovery libc++ lacks.
+    # hwservicemanager loads the QTI mapper passthrough implementation in its
+    # own process, so the shim must be preloaded globally, not only by AeraGpu.
+    export LD_PRELOAD /system/lib64/libaera_gpu_compat.so:/vendor/lib64/libgralloc.qti.so
 
 on property:ro.boot.usbcontroller=*
     setprop sys.usb.controller ${ro.boot.usbcontroller}
@@ -94,7 +99,7 @@ on fs
     # explicitly, after /dev/block/bootdevice and /etc/recovery.fstab are ready.
     start vendor.boot-default
 
-on property:crypto.ready=1
+on property:crypto.ready=1 && property:aera.spss.ready=1
     start keymint-qti
 
 # The SPU stack must come up only after the SPSS has loaded its 2nd phase:
@@ -109,7 +114,7 @@ on property:aera.spss.ready=1
 
 # Credential (CE) checks need the vendor HIDL gatekeeper HAL. It must start
 # only after the TEE listeners are registered: started earlier it takes the
-# legacy verify() path (docs/a17-decrypt-progress.md), which the TA rejects
+# legacy verify() path, which the TA rejects
 # with ERROR_RETRY_TIMEOUT. gatekeeperd retries until it registers.
 on property:vendor.sys.listeners.registered=true
     start gatekeeper-hal

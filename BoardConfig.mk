@@ -125,9 +125,26 @@ TARGET_RECOVERY_DEVICE_MODULES += android.hardware.security.keymint-V1-ndk
 RECOVERY_LIBRARY_SOURCE_FILES += $(TARGET_OUT_SHARED_LIBRARIES)/libsqlite.so
 RECOVERY_LIBRARY_SOURCE_FILES += \
     $(TARGET_OUT_SHARED_LIBRARIES)/android.hardware.security.keymint-V1-ndk.so
+# Gatekeeper/keymint resolve some of their dependencies from the vendor tree,
+# so the ramdisk keeps a copy of /vendor/lib64 under /system/lib64 (searched
+# first). The Adreno/mapper closure must NOT be copied: its gralloc libraries
+# are built against the vendor's newer libc++, and the copy shadows the vendor
+# originals with the ramdisk's own libc++ already loaded, which fails to resolve
+# them (EGL init then reports EGL_NOT_INITIALIZED and the UI drops to software).
 BOARD_RECOVERY_IMAGE_PREPARE += \
     rm -f $(TARGET_RECOVERY_ROOT_OUT)/system/etc/vintf/manifest/android.system.keystore2-service.xml; \
     cp -a -n $(TARGET_RECOVERY_ROOT_OUT)/vendor/lib64/*.so $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/ 2>/dev/null || true; \
+    rm -f $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/libgralloc.qti.so \
+        $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/libgralloccore.so \
+        $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/libqdMetaData.so \
+        $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/libvmmem.so \
+        $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/android.hardware.graphics.allocator*.so \
+        $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/android.hardware.graphics.mapper*.so \
+        $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/android.hardware.graphics.common@*.so \
+        $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/android.hardware.graphics.common-V7-ndk.so \
+        $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/android.hardware.common-V2-ndk.so \
+        $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/vendor.qti.hardware.display.mapper*.so \
+        $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/vendor.qti.hardware.display.mapperextensions*.so; \
     cp -f $(TARGET_OUT_ETC)/task_profiles.json $(TARGET_RECOVERY_ROOT_OUT)/system/etc/task_profiles.json; \
     ln -sf android.hardware.gatekeeper@1.0-impl-qti.so $(TARGET_RECOVERY_ROOT_OUT)/vendor/lib64/hw/gatekeeper.default.so; \
     ln -sf android.hardware.gatekeeper@1.0-impl-qti.so $(TARGET_RECOVERY_ROOT_OUT)/vendor/lib64/hw/gatekeeper.qcom.so; \
@@ -135,7 +152,7 @@ BOARD_RECOVERY_IMAGE_PREPARE += \
     mkdir -p $(TARGET_RECOVERY_ROOT_OUT)/system/lib64; \
     ln -sf android.hardware.security.keymint-V1-ndk.so $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/android.hardware.security.keymint-V1-ndk_platform.so; \
     ln -sf android.hardware.security.secureclock-V1-ndk.so $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/android.hardware.security.secureclock-V1-ndk_platform.so; \
-    ln -sf android.hardware.security.sharedsecret-V1-ndk.so $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/android.hardware.security.sharedsecret-V1-ndk_platform.so;
+    ln -sf android.hardware.security.sharedsecret-V1-ndk.so $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/android.hardware.security.sharedsecret-V1-ndk_platform.so
 
 # Verified boot (unlocked bootloader; testkey is fine)
 BOARD_AVB_ENABLE := true
@@ -182,6 +199,11 @@ AERA_MISCELLANEOUS_ROOT_DIRECTORY := /sdcard
 # bronco is A/B and also has a dedicated recovery partition.
 AERA_AB_DEVICE_WITH_RECOVERY_PARTITION := 1
 AERA_DEFAULT_KEYMASTER_VERSION := 4.1
+
+# The FRP partition is a raw 512 KiB block device. The write/verify path was
+# tested on this device; the UI row is unselected
+# by default and the wipe fails closed if the bootloader protects the block.
+AERA_ENABLE_FRP_WIPE := 1
 
 # UI geometry (1080x2400). Adaptive scaling is the current AERA path; the
 # status-bar metrics keep AERA's defaults.

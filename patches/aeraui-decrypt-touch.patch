@@ -1,0 +1,26 @@
+diff --git a/aeraui/core/engine.cpp b/aeraui/core/engine.cpp
+index f8a85c1..faee4bf 100644
+--- a/aeraui/core/engine.cpp
++++ b/aeraui/core/engine.cpp
+@@ -1009,12 +1009,15 @@ public:
+     }
+     // Global raw-input consumers live below lock/operation overlays. Keep
+     // those consumers from stealing contacts that belong to trusted AERA UI.
+-    if (widgets::PointerDragActive() || suspended_ || lock_overlay_ != nullptr ||
+-        power_overlay_ != nullptr ||
+-        !backend_ready_ ||
+-        operation_running_ || nas_running_ || PluginBlocksUi() ||
+-        update_installing_ ||
+-        (update_running_ && update_task_ == UpdateTask::kDownload)) {
++    // The decrypt page runs before backend_ready_ and owns the whole screen,
++    // so it must still receive pointer events.
++    if (!decryption_active_ &&
++        (widgets::PointerDragActive() || suspended_ || lock_overlay_ != nullptr ||
++         power_overlay_ != nullptr ||
++         !backend_ready_ ||
++         operation_running_ || nas_running_ || PluginBlocksUi() ||
++         update_installing_ ||
++         (update_running_ && update_task_ == UpdateTask::kDownload))) {
+       if (slot != 0) return;
+       pointer_.x = visible_x;
+       pointer_.y = visible_y;

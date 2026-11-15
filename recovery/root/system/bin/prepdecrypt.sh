@@ -103,5 +103,6 @@ setprop prepdecrypt.setpatch 1
 # Do not wait for qseecomd or the TEE listeners here: keystore2 is started by
 # its own rc as soon as qseecomd registers, and keymint must follow immediately
 # so keystore2 finds the AIDL service. Waiting here reintroduces the #35 race.
+# KeyMint itself is gated on aera.spss.ready in init.recovery.qcom.rc.
 setprop crypto.ready 1
 log "crypto.ready=$(getprop crypto.ready)"

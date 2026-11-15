@@ -10,8 +10,22 @@
         <fqname>@1.0::IGatekeeper/default</fqname>
     </hal>
     <hal format="aidl">
+        <name>android.system.keystore2</name>
+        <fqname>IKeystoreService/default</fqname>
+    </hal>
+    <hal format="aidl">
         <name>android.hardware.security.keymint</name>
         <fqname>IKeyMintDevice/default</fqname>
+    </hal>
+    <hal format="hidl">
+        <name>android.hardware.graphics.mapper</name>
+        <transport arch="32+64">passthrough</transport>
+        <fqname>@4.0::IMapper/default</fqname>
+    </hal>
+    <hal format="hidl">
+        <name>vendor.qti.hardware.display.mapper</name>
+        <transport arch="32+64">passthrough</transport>
+        <fqname>@4.0::IQtiMapper/default</fqname>
     </hal>
     <hal format="aidl">
         <name>android.hardware.security.sharedsecret</name>

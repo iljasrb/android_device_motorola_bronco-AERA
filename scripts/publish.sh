@@ -7,8 +7,9 @@
 #
 #   scripts/publish.sh --yes --keep  # ... and keep the replaced build in archive/
 #
-# Publishes the newest out/AERA-bronco-*.img and .zip plus catalog.json, the
-# feed the in-recovery updater reads (schema 1).
+# Publishes the newest AERA-*-bronco.img and .zip plus catalog.json, the feed the
+# in-recovery updater reads (schema 1). It looks in $AERA_OUT, then the device
+# tree's out/, then $AERA_DIR/out/target/product/bronco.
 #
 # Files are uploaded into a staging directory and swapped into latest/ only after
 # every one landed at the expected size, so an interrupted upload leaves the
@@ -20,7 +21,13 @@
 #   PUBLISH_URL   public base url (default https://rom.flac.moe/bronco/recovery/aera)
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
-out=$root/out
+if [ -n "${AERA_OUT:-}" ]; then
+    out=$AERA_OUT
+elif compgen -G "${AERA_DIR:-$root/../aera_16.0}/out/target/product/bronco/AERA-*-bronco.img" >/dev/null; then
+    out="${AERA_DIR:-$root/../aera_16.0}/out/target/product/bronco"
+else
+    out=$root/out
+fi
 
 if [ -f "$root/.env.publish" ]; then
     while IFS='=' read -r k v; do
@@ -57,13 +64,13 @@ run() { if [ "$dry" = 1 ]; then printf '  would: %s\n' "$*"; else "$@"; fi; }
 rsh() { if [ "$dry" = 1 ]; then printf '  would: ssh %s bash -lc %s\n' "$host" "$*";
         else ssh "$host" "bash -lc \"$*\""; fi; }
 
-img=$(ls -t "$out"/AERA-bronco-*.img 2>/dev/null | head -1)
-zip=$(ls -t "$out"/AERA-bronco-*.zip 2>/dev/null | head -1)
-[ -n "$img" ] || { echo "no AERA-bronco-*.img in $out" >&2; exit 1; }
-[ -n "$zip" ] || { echo "no AERA-bronco-*.zip in $out (the updater installs the zip)" >&2; exit 1; }
+img=$(ls -t "$out"/AERA-*-bronco.img 2>/dev/null | head -1)
+zip=$(ls -t "$out"/AERA-*-bronco.zip 2>/dev/null | head -1)
+[ -n "$img" ] || { echo "no AERA-*-bronco.img in $out" >&2; exit 1; }
+[ -n "$zip" ] || { echo "no AERA-*-bronco.zip in $out (the updater installs the zip)" >&2; exit 1; }
 img_name=$(basename "$img")
 zip_name=$(basename "$zip")
-build=${img_name#AERA-bronco-}; build=${build%%-*}
+build=${img_name#AERA-}; build=${build%-bronco.img}
 
 # The updater installs the referenced package as a zip and compares build_time
 # with the value the installed image reports.

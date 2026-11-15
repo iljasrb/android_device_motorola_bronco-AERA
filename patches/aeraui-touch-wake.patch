@@ -1,13 +1,48 @@
+diff --git a/aeraui/core/engine.cpp b/aeraui/core/engine.cpp
+index f8a85c1..65e0448 100644
+--- a/aeraui/core/engine.cpp
++++ b/aeraui/core/engine.cpp
+@@ -958,15 +958,15 @@ public:
+   void TrackPointerContact(int slot,bool pressed) {
+     unlock_touch_gate_.Observe(slot,pressed);
+   }
+-  void SetAmbientFingerprintPointer(const PointerEvent& event) {
+-    if(event.slot!=0||suspended_||!lock_overlay_||!lock_ambient_||unlock_touch_gate_.Blocked())return;
++  bool SetAmbientFingerprintPointer(const PointerEvent& event) {
++    if(event.slot!=0||suspended_||!lock_overlay_||!lock_ambient_||unlock_touch_gate_.Blocked())return false;
+     const int32_t x=transform_.ToLogicalX(event.x),y=transform_.ToLogicalY(event.y);
+     int32_t visible_x=x,visible_y=y;
+     if(landscape_) {
+       visible_x=gpu_accelerated_?y:height_-y-1;
+       visible_y=gpu_accelerated_?width_-x-1:x;
+     }
+-    LockSceneAmbientFingerprintTouch(lock_overlay_,visible_x,visible_y,event.pressed);
++    return LockSceneAmbientFingerprintTouch(lock_overlay_,visible_x,visible_y,event.pressed);
+   }
+   void SetPointer(const PointerEvent &event) {
+     if(unlock_touch_gate_.Filter(event.slot,event.pressed)) {
+@@ -4313,7 +4313,7 @@ DecryptionCompletion Engine::TakeDecryptionCompletion() {
+ }
+ void Engine::SetPointer(const PointerEvent &event) { impl_->SetPointer(event); }
+ void Engine::TrackPointerContact(int slot,bool pressed) { impl_->TrackPointerContact(slot,pressed); }
+-void Engine::SetAmbientFingerprintPointer(const PointerEvent& event) { impl_->SetAmbientFingerprintPointer(event); }
++bool Engine::SetAmbientFingerprintPointer(const PointerEvent& event) { return impl_->SetAmbientFingerprintPointer(event); }
+ void Engine::SetMouseConnected(bool connected) { impl_->SetMouseConnected(connected); }
+ void Engine::MouseMove(int dx, int dy) { impl_->MouseMove(dx, dy); }
+ void Engine::MouseButton(bool pressed, int button) { impl_->MouseButton(pressed, button); }
 diff --git a/aeraui/core/runner.cpp b/aeraui/core/runner.cpp
-index 04582358..66eb00e0 100644
+index 5e55427..b98f340 100644
 --- a/aeraui/core/runner.cpp
 +++ b/aeraui/core/runner.cpp
-@@ -289,7 +292,18 @@ bool HandleEvent(Engine& engine, InteractionBoost& performance,
-         return false;
-     }
-     if (event.type == EV_ABS) {
--        if (hardware.screen_off) return false;
-+        if (hardware.screen_off) {
+@@ -301,8 +301,19 @@ bool HandleEvent(Engine& engine, InteractionBoost& performance,
+             pointer.y=event.value&0xffff;
+             pointer.slot=event.code>=2?1:0;
+             pointer.pressed=event.code==1||event.code==3;
+-            engine.SetAmbientFingerprintPointer(pointer);
+-            return false;
++            // The ambient lock owns touches on its fingerprint target. Only a
++            // contact it did not consume is a wake gesture.
++            if (engine.SetAmbientFingerprintPointer(pointer)) return false;
 +            // A touch is a wake gesture: without this the display only woke on
 +            // a hardware key, so the screen looked dead to touch.
 +            if (!engine.WakeForOperation()) {
@@ -18,7 +53,21 @@ index 04582358..66eb00e0 100644
 +            performance.Boost();
 +            hardware.screen_off = false;
 +            return false;  // swallow the waking contact
-+        }
+         }
          performance.Boost();
          aeraScreenTimer.Wake();
-         PointerEvent pointer;
+diff --git a/aeraui/include/aeraui/engine.hpp b/aeraui/include/aeraui/engine.hpp
+index 7dffa21..ad77978 100644
+--- a/aeraui/include/aeraui/engine.hpp
++++ b/aeraui/include/aeraui/engine.hpp
+@@ -159,7 +159,9 @@ class Engine final {
+     void SetPointer(const PointerEvent& event);
+     // Observe contacts even when AOD suppresses ordinary UI input.
+     void TrackPointerContact(int slot, bool pressed);
+-    void SetAmbientFingerprintPointer(const PointerEvent& event);
++    // Returns true when the ambient lock's fingerprint target consumed the
++    // contact, so the caller must not also treat it as a wake gesture.
++    bool SetAmbientFingerprintPointer(const PointerEvent& event);
+     void SetMouseConnected(bool connected);
+     void MouseMove(int dx, int dy);
+     void MouseButton(bool pressed, int button = 1);

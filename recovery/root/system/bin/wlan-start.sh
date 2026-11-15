@@ -34,14 +34,31 @@ mount_ro() {
     return 1
 }
 
+# bronco exposes vendor/vendor_dlkm without a slot suffix. Try the plain names
+# first, then the slot-suffixed mapper paths used by other SM8475 targets.
+mount_first_ro() {
+    dir="$1"
+    shift
+    grep -q " $dir " /proc/mounts && return 0
+    for dev in "$@"; do
+        [ -e "$dev" ] || continue
+        mount_ro "$dev" "$dir" && return 0
+    done
+    return 1
+}
+
 # Mount the vendor images at private paths. Nothing executes from these mounts;
 # they are removed before cnss-daemon/wpa_supplicant are started.
 vendor_tmp=/tmp/wlan-vendor
 dlkm_tmp=/tmp/wlan-dlkm
 i=0
 while : ; do
-    mount_ro "/dev/block/mapper/vendor$slot" "$vendor_tmp"
-    mount_ro "/dev/block/mapper/vendor_dlkm$slot" "$dlkm_tmp"
+    mount_first_ro "$vendor_tmp" \
+        /dev/block/by-name/vendor /dev/block/mapper/vendor \
+        "/dev/block/mapper/vendor$slot" "/dev/block/by-name/vendor$slot"
+    mount_first_ro "$dlkm_tmp" \
+        /dev/block/by-name/vendor_dlkm /dev/block/mapper/vendor_dlkm \
+        "/dev/block/mapper/vendor_dlkm$slot" "/dev/block/by-name/vendor_dlkm$slot"
     [ -e "$vendor_tmp/etc/wifi/qca6490/WCNSS_qcom_cfg.ini" ] &&
         [ -e "$dlkm_tmp/lib/modules/qca_cld3_qca6490.ko" ] && break
     if [ "$i" -ge 300 ]; then

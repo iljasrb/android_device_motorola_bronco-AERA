@@ -123,9 +123,12 @@ elif grep -q 'Is encrypted, do decrypt page first' /tmp/recovery.log; then
     # not entered a PIN yet; restarting here would unmount /data and loop.
     setprop aera.crypto.retries 0
     log "decrypt page is active; not restarting recovery"
-elif ! grep -q 'Unable to decrypt metadata encryption' /tmp/recovery.log; then
+elif ! grep -q 'Unable to decrypt metadata encryption' /tmp/recovery.log &&
+     ! logcat -d 2>/dev/null | grep -q 'Upgrading key:.*keymaster_key_blob'; then
     # No metadata failure was reported. Do not touch a working TEE stack just
-    # because /data is not mounted for some other reason.
+    # because /data is not mounted for some other reason. The recovery binary
+    # logs the keyblob upgrade attempt to logcat, not to /tmp/recovery.log, so
+    # check both before deciding that the TEE stack is healthy.
     log "no metadata decrypt failure reported; not restarting recovery"
 else
     retries=$(getprop aera.crypto.retries)
@@ -152,13 +155,13 @@ else
     # KeyMint may open the TEE. It always sets crypto.ready after qseecomd is
     # up, including on mount failures.
     wait_prop crypto.ready 1 300
+    wait_prop aera.spss.ready 1 600
 
-    setprop ctl.start keymint-qti
+    # Re-trigger the init action so KeyMint starts only after the SPU is ready.
+    # keystore2 waits for the AIDL KeyMint service, so no fixed sleep is needed.
+    setprop crypto.ready 0
+    setprop crypto.ready 1
     wait_service keymint-qti running 50
-    # Give KeyMint time to register its AIDL services before keystore2 starts.
-    # Starting keystore2 in that window makes it take the legacy HIDL path,
-    # which rejects the wrapped metadata keyblob (INCOMPATIBLE_BLOCK_MODE).
-    sleep 1
 
     setprop ctl.start keystore2
     if wait_keystore 200; then

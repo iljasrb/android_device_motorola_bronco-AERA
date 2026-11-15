@@ -44,4 +44,19 @@
         <transport>hwbinder</transport>
         <fqname>@1.0::IGatekeeper/default</fqname>
     </hal>
+    <!-- Adreno's platform EGL subdriver resolves its gralloc buffers through
+         the QTI mapper passthrough HAL. The vendor manifest declares these,
+         but VintfObjectRecovery only reads the system manifest, so without
+         them eglInitialize fails with a gralloc build-configuration
+         mismatch and the UI falls back to software scanout. -->
+    <hal format="hidl">
+        <name>android.hardware.graphics.mapper</name>
+        <transport arch="32+64">passthrough</transport>
+        <fqname>@4.0::IMapper/default</fqname>
+    </hal>
+    <hal format="hidl">
+        <name>vendor.qti.hardware.display.mapper</name>
+        <transport arch="32+64">passthrough</transport>
+        <fqname>@4.0::IQtiMapper/default</fqname>
+    </hal>
 </manifest>

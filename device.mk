@@ -27,6 +27,24 @@ RECOVERY_LIBRARY_SOURCE_FILES += \
     $(TARGET_OUT_SHARED_LIBRARIES)/libion.so \
     $(TARGET_OUT_SHARED_LIBRARIES)/libdmabufheap.so
 
+# Adreno's EGL initializes its Android platform subdriver even for pbuffer-only
+# rendering. The subdriver (vendor blob) needs the platform native-window and
+# mapper client APIs, so build the matching A16 libraries into the ramdisk
+# instead of shipping the ROM's newer copies: the recovery binary already links
+# this ramdisk's libc++, and a newer libui cannot resolve against it.
+# std::__1::__hash_memory shim (gpu/) for the ROM's gralloc libraries.
+TARGET_RECOVERY_DEVICE_MODULES += \
+    libaera_gpu_compat \
+    libui \
+    libnativewindow \
+    android.hardware.graphics.common-V6-ndk
+
+RECOVERY_LIBRARY_SOURCE_FILES += \
+    $(TARGET_OUT_SHARED_LIBRARIES)/libaera_gpu_compat.so \
+    $(TARGET_OUT_SHARED_LIBRARIES)/libui.so \
+    $(TARGET_OUT_SHARED_LIBRARIES)/libnativewindow.so \
+    $(TARGET_OUT_SHARED_LIBRARIES)/android.hardware.graphics.common-V6-ndk.so
+
 # FUSE passthrough
 PRODUCT_PROPERTY_OVERRIDES += \
     persist.sys.fuse.passthrough.enable=true

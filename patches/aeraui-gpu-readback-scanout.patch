@@ -1,0 +1,514 @@
+diff --git a/aeraui/core/engine.cpp b/aeraui/core/engine.cpp
+index f8a85c1..589b579 100644
+--- a/aeraui/core/engine.cpp
++++ b/aeraui/core/engine.cpp
+@@ -3904,7 +3904,17 @@ private:
+ 
+     if (self->gpu_accelerated_) {
+       if (lv_display_flush_is_last(display)) {
+-        if (!self->gpu_renderer_.Present(display)) {
++        const unsigned int index = self->next_software_scanout_;
++        GRSurface *surface = index == 0 ? self->scanout_surface1_
++                                        : self->scanout_surface2_;
++        gr_surface target = index == 0 ? self->scanout1_ : self->scanout2_;
++        bool presented = false;
++        if (surface != nullptr && target != nullptr &&
++            self->gpu_renderer_.Present(display, surface)) {
++          presented = gr_drm_present(target) == 0;
++          if (presented) self->next_software_scanout_ = 1U - index;
++        }
++        if (!presented) {
+           __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                               "Adreno rejected the LVGL frame");
+         } else {
+diff --git a/aeraui/core/gpu_renderer.cpp b/aeraui/core/gpu_renderer.cpp
+index 8481d6c..e43dba2 100644
+--- a/aeraui/core/gpu_renderer.cpp
++++ b/aeraui/core/gpu_renderer.cpp
+@@ -6,11 +6,10 @@
+ #include "gpu_renderer.hpp"
+ 
+ #include <android/log.h>
+-#include <android/hardware_buffer.h>
+-#include <vndk/hardware_buffer.h>
+ #include <dlfcn.h>
+ #include <unistd.h>
+ 
++#include <cstdlib>
+ #include <cstring>
+ 
+ #include "drivers/opengles/glad/include/glad/egl.h"
+@@ -25,13 +24,10 @@ namespace {
+ constexpr char kLogTag[] = "AeraGpu";
+ constexpr char kEglDriver[] = "/vendor/lib64/egl/libEGL_adreno.so";
+ constexpr char kGlesDriver[] = "/vendor/lib64/egl/libGLESv2_adreno.so";
+-constexpr char kNativeWindowLibrary[] = "/vendor/lib64/libnativewindow.so";
+-constexpr uint32_t Fourcc(char a, char b, char c, char d) {
+-  return static_cast<uint32_t>(a) | (static_cast<uint32_t>(b) << 8) |
+-         (static_cast<uint32_t>(c) << 16) | (static_cast<uint32_t>(d) << 24);
+-}
+-constexpr uint32_t kDrmFormatAbgr8888 = Fourcc('A', 'B', '2', '4');
+-constexpr EGLenum kEglNativeBufferAndroid = 0x3140;
++// Supplies std::__1::__hash_memory for the installed ROM's gralloc libraries;
++// the ramdisk's own libc++ predates that symbol. Loaded into the global scope
++// before EGL so Adreno's platform subdriver can link them.
++constexpr char kLibcxxCompat[] = "/system/lib64/libaera_gpu_compat.so";
+ 
+ struct SymbolLoader {
+   void* library;
+@@ -54,33 +50,6 @@ bool LoadBootstrap(void* library, const char* name, T* function) {
+   return *function != nullptr;
+ }
+ 
+-using ImageTargetTexture = void (*)(GLenum target, void* image);
+-using AllocateHardwareBuffer = int (*)(const AHardwareBuffer_Desc*,
+-                                       AHardwareBuffer**);
+-using ReleaseHardwareBuffer = void (*)(AHardwareBuffer*);
+-using DescribeHardwareBuffer = void (*)(const AHardwareBuffer*,
+-                                        AHardwareBuffer_Desc*);
+-using GetHardwareBufferHandle = const native_handle_t* (*)(
+-    const AHardwareBuffer*);
+-using ToNativeWindowBuffer = void* (*)(const AHardwareBuffer*);
+-using ImportScanoutBuffer = int (*)(const GRDrmBufferInfo*, gr_surface*);
+-using ReleaseScanoutBuffer = int (*)(gr_surface);
+-
+-bool HasExtension(const char* extensions, const char* wanted) {
+-  if (extensions == nullptr || wanted == nullptr || *wanted == '\0')
+-    return false;
+-  const size_t wanted_length = std::strlen(wanted);
+-  const char* match = extensions;
+-  while ((match = std::strstr(match, wanted)) != nullptr) {
+-    const bool starts_word = match == extensions || match[-1] == ' ';
+-    const char tail = match[wanted_length];
+-    if (starts_word && (tail == '\0' || tail == ' '))
+-      return true;
+-    match += wanted_length;
+-  }
+-  return false;
+-}
+-
+ void DisplayResolutionChanged(lv_event_t* event) {
+   auto* display = static_cast<lv_display_t*>(lv_event_get_target(event));
+   auto* texture = static_cast<lv_opengles_texture_t*>(
+@@ -104,6 +73,16 @@ void DisplayResolutionChanged(lv_event_t* event) {
+                       "reshaped LVGL texture to %dx%d", width, height);
+ }
+ 
++// minui's scanout surfaces store BGRA bytes; glReadPixels() only returns RGBA
++// in GLES, so the red and blue channels trade places afterwards.
++void SwapRedBlue(uint32_t* pixels, size_t count) {
++  for (size_t i = 0; i < count; ++i) {
++    const uint32_t pixel = pixels[i];
++    pixels[i] = (pixel & 0xFF00FF00U) | ((pixel & 0x00FF0000U) >> 16) |
++                ((pixel & 0x000000FFU) << 16);
++  }
++}
++
+ }  // namespace
+ 
+ GpuRenderer::~GpuRenderer() {
+@@ -115,6 +94,26 @@ bool GpuRenderer::Initialize(int32_t width, int32_t height) {
+   width_ = width;
+   height_ = height;
+ 
++  if (dlopen(kLibcxxCompat, RTLD_NOW | RTLD_GLOBAL) == nullptr)
++    __android_log_print(ANDROID_LOG_WARN, kLogTag,
++                        "libc++ compatibility shim unavailable: %s", dlerror());
++
++  // Load the ramdisk's platform graphics libraries before EGL. The vendor
++  // subdriver links libgralloctypes/libnativewindow/libui; if /vendor is
++  // mounted first, the linker picks the ROM's newer copies and the Adreno
++  // gralloc module reports a build-configuration mismatch.
++  const char* const kPlatformGraphicsLibs[] = {
++      "/vendor/lib64/libgralloctypes.so",
++      "/system/lib64/libnativewindow.so",
++      "/system/lib64/libui.so",
++  };
++  for (const char* library : kPlatformGraphicsLibs) {
++    if (dlopen(library, RTLD_NOW | RTLD_GLOBAL) == nullptr)
++      __android_log_print(ANDROID_LOG_WARN, kLogTag,
++                          "platform graphics library unavailable: %s: %s",
++                          library, dlerror());
++  }
++
+   egl_library_ = dlopen(kEglDriver, RTLD_NOW | RTLD_GLOBAL);
+   if (egl_library_ == nullptr) {
+     __android_log_print(ANDROID_LOG_WARN, kLogTag,
+@@ -128,21 +126,6 @@ bool GpuRenderer::Initialize(int32_t width, int32_t height) {
+     Shutdown();
+     return false;
+   }
+-  nativewindow_library_ = dlopen(kNativeWindowLibrary, RTLD_NOW | RTLD_GLOBAL);
+-  // Some recovery device trees package the matching native-window runtime in
+-  // /system as well: inspecting Android's vendor partition temporarily hides
+-  // the ramdisk copy. Keep the existing vendor runtime as the first choice.
+-  if (nativewindow_library_ == nullptr) {
+-    nativewindow_library_ = dlopen("/system/lib64/libnativewindow.so",
+-                                 RTLD_NOW | RTLD_GLOBAL);
+-  }
+-  if (nativewindow_library_ == nullptr) {
+-    __android_log_print(ANDROID_LOG_WARN, kLogTag,
+-                        "Android native-buffer runtime unavailable: %s",
+-                        dlerror());
+-    Shutdown();
+-    return false;
+-  }
+ 
+   PFNEGLGETDISPLAYPROC get_display = nullptr;
+   PFNEGLINITIALIZEPROC initialize = nullptr;
+@@ -199,8 +182,12 @@ bool GpuRenderer::Initialize(int32_t width, int32_t height) {
+     return false;
+   }
+ 
++  // The pbuffer is the scanout-sized composition target: LVGL renders into its
++  // own texture and the final pass copies the frame here for the readback.
+   const EGLint surface_attributes[] = {
+-      EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE,
++      EGL_WIDTH, width_,
++      EGL_HEIGHT, height_,
++      EGL_NONE,
+   };
+   const EGLint context_attributes[] = {
+       EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE,
+@@ -229,131 +216,12 @@ bool GpuRenderer::Initialize(int32_t width, int32_t height) {
+     return false;
+   }
+ 
+-  const char* egl_extensions = eglQueryString(display, EGL_EXTENSIONS);
+-  const char* gl_extensions =
+-      reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+-  auto image_target = reinterpret_cast<ImageTargetTexture>(
+-      LoadSymbol(&gles_loader, "glEGLImageTargetTexture2DOES"));
+-  if (!HasExtension(egl_extensions, "EGL_ANDROID_image_native_buffer") ||
+-      !HasExtension(gl_extensions, "GL_OES_EGL_image") ||
+-      eglCreateImageKHR == nullptr || eglDestroyImageKHR == nullptr ||
+-      image_target == nullptr) {
+-    __android_log_print(ANDROID_LOG_WARN, kLogTag,
+-                        "Adreno native-buffer image import is unavailable");
+-    Shutdown();
+-    return false;
+-  }
+-
+-  auto allocate_buffer = reinterpret_cast<AllocateHardwareBuffer>(
+-      dlsym(nativewindow_library_, "AHardwareBuffer_allocate"));
+-  auto release_buffer = reinterpret_cast<ReleaseHardwareBuffer>(
+-      dlsym(nativewindow_library_, "AHardwareBuffer_release"));
+-  auto describe_buffer = reinterpret_cast<DescribeHardwareBuffer>(
+-      dlsym(nativewindow_library_, "AHardwareBuffer_describe"));
+-  auto get_buffer_handle = reinterpret_cast<GetHardwareBufferHandle>(
+-      dlsym(nativewindow_library_, "AHardwareBuffer_getNativeHandle"));
+-  auto to_native_window = reinterpret_cast<ToNativeWindowBuffer>(dlsym(
+-      nativewindow_library_,
+-      "_ZN7android38AHardwareBuffer_to_ANativeWindowBufferEPK15AHardwareBuffer"));
+-  auto import_scanout = reinterpret_cast<ImportScanoutBuffer>(
+-      dlsym(RTLD_DEFAULT, "gr_drm_import_scanout_buffer"));
+-  if (allocate_buffer == nullptr || release_buffer == nullptr ||
+-      describe_buffer == nullptr || get_buffer_handle == nullptr ||
+-      to_native_window == nullptr || import_scanout == nullptr) {
+-    __android_log_print(ANDROID_LOG_WARN, kLogTag,
+-                        "native-buffer allocation or DRM import API is unavailable");
+-    Shutdown();
+-    return false;
+-  }
+-
+-  for (unsigned int i = 0; i < 2; ++i) {
+-    AHardwareBuffer_Desc requested{};
+-    requested.width = static_cast<uint32_t>(width_);
+-    requested.height = static_cast<uint32_t>(height_);
+-    requested.layers = 1;
+-    requested.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
+-    // CPU access forces a linear allocation. GPU_FRAMEBUFFER makes it
+-    // renderable and COMPOSER_OVERLAY makes it scanout-capable.
+-    requested.usage = AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER |
+-                      AHARDWAREBUFFER_USAGE_COMPOSER_OVERLAY |
+-                      AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN |
+-                      AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN;
+-    if (allocate_buffer(&requested, &hardware_buffers_[i]) != 0 ||
+-        hardware_buffers_[i] == nullptr) {
+-      __android_log_print(ANDROID_LOG_WARN, kLogTag,
+-                          "could not allocate native scanout %u", i);
+-      Shutdown();
+-      return false;
+-    }
+-
+-    AHardwareBuffer_Desc actual{};
+-    describe_buffer(hardware_buffers_[i], &actual);
+-    const native_handle_t* handle = get_buffer_handle(hardware_buffers_[i]);
+-    if (handle == nullptr || handle->numFds < 1 || actual.stride == 0) {
+-      __android_log_print(ANDROID_LOG_WARN, kLogTag,
+-                          "native scanout %u has no shareable plane", i);
+-      Shutdown();
+-      return false;
+-    }
+-    const EGLint image_attributes[] = {
+-        EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE,
+-    };
+-    EGLImageKHR image = eglCreateImageKHR(
+-        display, EGL_NO_CONTEXT, kEglNativeBufferAndroid,
+-        reinterpret_cast<EGLClientBuffer>(
+-            to_native_window(hardware_buffers_[i])),
+-        image_attributes);
+-    if (image == EGL_NO_IMAGE_KHR) {
+-      __android_log_print(ANDROID_LOG_WARN, kLogTag,
+-                          "native-buffer import %u failed: %#x", i,
+-                          eglGetError());
+-      Shutdown();
+-      return false;
+-    }
+-    egl_images_[i] = image;
+-
+-    // Register the already-imported EGL allocation with KMS. Qualcomm EGL
+-    // returns EGL_BAD_ACCESS if DRM claims the dma-buf before EGLImage owns it.
+-    GRDrmBufferInfo info{};
+-    info.dma_buf_fd = handle->data[0];
+-    info.width = static_cast<int>(actual.width);
+-    info.height = static_cast<int>(actual.height);
+-    info.pitch = static_cast<int>(actual.stride * 4U);
+-    info.drm_format = kDrmFormatAbgr8888;
+-    if (import_scanout(&info, &scanouts_[i]) != 0) {
+-      __android_log_print(ANDROID_LOG_WARN, kLogTag,
+-                          "DRM rejected native scanout %u (%ux%u stride %u)",
+-                          i, actual.width, actual.height, actual.stride);
+-      Shutdown();
+-      return false;
+-    }
+-
+-    glGenTextures(1, &textures_[i]);
+-    glBindTexture(GL_TEXTURE_2D, textures_[i]);
+-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+-    image_target(GL_TEXTURE_2D, image);
+-
+-    glGenFramebuffers(1, &framebuffers_[i]);
+-    glBindFramebuffer(GL_FRAMEBUFFER, framebuffers_[i]);
+-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+-                           GL_TEXTURE_2D, textures_[i], 0);
+-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+-      __android_log_print(ANDROID_LOG_WARN, kLogTag,
+-                          "scanout framebuffer %u is not renderable", i);
+-      Shutdown();
+-      return false;
+-    }
+-  }
+-
+-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
++  glPixelStorei(GL_PACK_ALIGNMENT, 4);
+   ready_ = true;
+   __android_log_print(
+       ANDROID_LOG_INFO, kLogTag,
+-      "zero-copy native-buffer GPU ready: EGL %d.%d, %s, %s, %dx%d double scanout",
+-      major, minor, reinterpret_cast<const char*>(glGetString(GL_VENDOR)),
++      "software-scanout GPU ready: EGL %d.%d, %s, %s, %dx%d pbuffer", major,
++      minor, reinterpret_cast<const char*>(glGetString(GL_VENDOR)),
+       reinterpret_cast<const char*>(glGetString(GL_RENDERER)), width_, height_);
+   return true;
+ }
+@@ -375,23 +243,23 @@ lv_display_t* GpuRenderer::CreateDisplay(int32_t logical_width,
+     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+     // The OpenGL texture driver does not resize itself when LVGL swaps the
+-    // logical dimensions for 90/270-degree rotation. A fixed portrait texture
+-    // clips and folds a landscape scene, especially mutable video images.
+-    // Keep the backing texture equal to the current logical viewport and let
+-    // lv_opengles_render_display_texture rotate it once into native scanout.
++    // logical dimensions for 90/270-degree rotation. Keep the backing texture
++    // equal to the current logical viewport and let
++    // lv_opengles_render_display_texture rotate it once into the scanout.
+     lv_display_add_event_cb(display, DisplayResolutionChanged,
+                             LV_EVENT_RESOLUTION_CHANGED, nullptr);
+   }
+   return display;
+ }
+ 
+-bool GpuRenderer::Present(lv_display_t* display) {
+-  if (!ready_ || display == nullptr)
++bool GpuRenderer::Present(lv_display_t* display, GRSurface* scanout) {
++  if (!ready_ || display == nullptr || scanout == nullptr ||
++      scanout->data == nullptr || scanout->width != width_ ||
++      scanout->height != height_ || scanout->pixel_bytes != 4)
+     return false;
+ 
+   // GL errors remain pending until read. A rejected LVGL draw command must
+   // not suppress an otherwise valid scanout (including every later frame).
+-  // Keep drawing diagnostics separate from the final composition/DRM result.
+   GLenum draw_error = GL_NO_ERROR;
+   bool context_lost = false;
+   for (int pending = 0; pending < 16; ++pending) {
+@@ -410,14 +278,13 @@ bool GpuRenderer::Present(lv_display_t* display) {
+     if (context_lost) return false;
+   } else draw_failures = 0;
+ 
+-  const unsigned int index = next_buffer_;
+-  glBindFramebuffer(GL_FRAMEBUFFER, framebuffers_[index]);
++  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+   glViewport(0, 0, width_, height_);
+   glDisable(GL_SCISSOR_TEST);
+   glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+   glClear(GL_COLOR_BUFFER_BIT);
+-  // The native scanout and LVGL texture share the panel's portrait orientation.
+-  // No additional axis mirroring is required for the final composition.
++  // The scanout and LVGL texture share the panel's portrait orientation. No
++  // additional axis mirroring is required for the final composition.
+   lv_opengles_render_display_texture(display, false, false);
+   glFinish();
+   const GLenum present_error = glGetError();
+@@ -428,10 +295,36 @@ bool GpuRenderer::Present(lv_display_t* display) {
+                           "scanout composition error: %#x", present_error);
+     return false;
+   }
+-  if (gr_drm_present(scanouts_[index]) != 0)
+-    return false;
+ 
+-  next_buffer_ = 1U - index;
++  const size_t row_pixels = static_cast<size_t>(width_);
++  const size_t row_bytes = row_pixels * 4U;
++  if (static_cast<size_t>(scanout->row_bytes) == row_bytes) {
++    glReadPixels(0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE,
++                 scanout->data);
++    SwapRedBlue(reinterpret_cast<uint32_t*>(scanout->data),
++                row_pixels * static_cast<size_t>(height_));
++  } else {
++    // The KMS buffer pitch is padded; stage one frame and copy it row by row.
++    if (readback_ == nullptr)
++      readback_ = static_cast<uint8_t*>(std::malloc(row_bytes * height_));
++    if (readback_ == nullptr) return false;
++    glReadPixels(0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, readback_);
++    SwapRedBlue(reinterpret_cast<uint32_t*>(readback_),
++                row_pixels * static_cast<size_t>(height_));
++    for (int32_t y = 0; y < height_; ++y) {
++      std::memcpy(scanout->data + static_cast<size_t>(y) * scanout->row_bytes,
++                  readback_ + static_cast<size_t>(y) * row_bytes, row_bytes);
++    }
++  }
++
++  const GLenum readback_error = glGetError();
++  if (readback_error != GL_NO_ERROR) {
++    static unsigned int failures = 0;
++    if (++failures == 1 || failures % 120 == 0)
++      __android_log_print(ANDROID_LOG_ERROR, kLogTag,
++                          "scanout readback error: %#x", readback_error);
++    return false;
++  }
+   return true;
+ }
+ 
+@@ -445,15 +338,6 @@ void GpuRenderer::Shutdown() {
+                    static_cast<EGLContext>(egl_context_));
+     if (driver_initialized_)
+       lv_opengles_deinit();
+-    if (glDeleteFramebuffers != nullptr)
+-      glDeleteFramebuffers(2, framebuffers_);
+-    if (glDeleteTextures != nullptr)
+-      glDeleteTextures(2, textures_);
+-    for (unsigned int i = 0; i < 2; ++i) {
+-      if (egl_images_[i] != nullptr && eglDestroyImageKHR != nullptr)
+-        eglDestroyImageKHR(static_cast<EGLDisplay>(egl_display_),
+-                           static_cast<EGLImageKHR>(egl_images_[i]));
+-    }
+     eglMakeCurrent(static_cast<EGLDisplay>(egl_display_), EGL_NO_SURFACE,
+                    EGL_NO_SURFACE, EGL_NO_CONTEXT);
+   }
+@@ -468,43 +352,22 @@ void GpuRenderer::Shutdown() {
+     if (eglTerminate != nullptr)
+       eglTerminate(static_cast<EGLDisplay>(egl_display_));
+   }
+-  auto release_scanout = reinterpret_cast<ReleaseScanoutBuffer>(
+-      dlsym(RTLD_DEFAULT, "gr_drm_release_imported_scanout_buffer"));
+-  auto release_buffer = nativewindow_library_ == nullptr
+-      ? nullptr
+-      : reinterpret_cast<ReleaseHardwareBuffer>(
+-            dlsym(nativewindow_library_, "AHardwareBuffer_release"));
+-  for (unsigned int i = 0; i < 2; ++i) {
+-    if (scanouts_[i] != nullptr && release_scanout != nullptr)
+-      release_scanout(scanouts_[i]);
+-    if (hardware_buffers_[i] != nullptr && release_buffer != nullptr)
+-      release_buffer(hardware_buffers_[i]);
+-    hardware_buffers_[i] = nullptr;
+-  }
+   if (gles_library_ != nullptr)
+     dlclose(gles_library_);
+   if (egl_library_ != nullptr)
+     dlclose(egl_library_);
+-  if (nativewindow_library_ != nullptr)
+-    dlclose(nativewindow_library_);
++  std::free(readback_);
++  readback_ = nullptr;
+ 
+   egl_library_ = nullptr;
+   gles_library_ = nullptr;
+-  nativewindow_library_ = nullptr;
+   egl_display_ = nullptr;
+   egl_surface_ = nullptr;
+   egl_context_ = nullptr;
+-  for (unsigned int i = 0; i < 2; ++i) {
+-    egl_images_[i] = nullptr;
+-    textures_[i] = 0;
+-    framebuffers_[i] = 0;
+-    scanouts_[i] = nullptr;
+-  }
+   width_ = 0;
+   height_ = 0;
+   logical_width_ = 0;
+   logical_height_ = 0;
+-  next_buffer_ = 0;
+   driver_initialized_ = false;
+ }
+ 
+diff --git a/aeraui/core/gpu_renderer.hpp b/aeraui/core/gpu_renderer.hpp
+index 9a6bc49..211091f 100644
+--- a/aeraui/core/gpu_renderer.hpp
++++ b/aeraui/core/gpu_renderer.hpp
+@@ -10,13 +10,14 @@
+ #include <lvgl.h>
+ #include <minuitwrp/minui.h>
+ 
+-struct AHardwareBuffer;
+-
+ namespace aeraui {
+ 
+-// Owns the recovery-local Adreno EGL context and imports minui's two DRM
+-// scanout buffers. Nothing is linked against the vendor driver: every entry
+-// point is resolved at runtime so the software renderer remains bootable.
++// Owns the recovery-local Adreno EGL context. Frames are composited into an
++// offscreen pbuffer and copied into the DRM scanout buffer minui already
++// registered with KMS, so the renderer needs nothing from the vendor graphics
++// stack except libEGL_adreno/libGLESv2_adreno (no gralloc, no native window).
++// Nothing is linked against the vendor driver: every entry point is resolved at
++// runtime so the software renderer remains bootable.
+ class GpuRenderer final {
+  public:
+   GpuRenderer() = default;
+@@ -27,27 +28,23 @@ class GpuRenderer final {
+ 
+   bool Initialize(int32_t width, int32_t height);
+   lv_display_t* CreateDisplay(int32_t logical_width, int32_t logical_height);
+-  bool Present(lv_display_t* display);
++  // Composites the LVGL texture for `display` into `scanout`, which the caller
++  // then hands to gr_drm_present().
++  bool Present(lv_display_t* display, GRSurface* scanout);
+   void Shutdown();
+   bool IsReady() const { return ready_; }
+ 
+  private:
+   void* egl_library_ = nullptr;
+   void* gles_library_ = nullptr;
+-  void* nativewindow_library_ = nullptr;
+   void* egl_display_ = nullptr;
+   void* egl_surface_ = nullptr;
+   void* egl_context_ = nullptr;
+-  void* egl_images_[2] = {nullptr, nullptr};
+-  unsigned int textures_[2] = {0, 0};
+-  unsigned int framebuffers_[2] = {0, 0};
+-  AHardwareBuffer* hardware_buffers_[2] = {nullptr, nullptr};
+-  gr_surface scanouts_[2] = {nullptr, nullptr};
++  uint8_t* readback_ = nullptr;
+   int32_t width_ = 0;
+   int32_t height_ = 0;
+   int32_t logical_width_ = 0;
+   int32_t logical_height_ = 0;
+-  unsigned int next_buffer_ = 0;
+   bool driver_initialized_ = false;
+   bool ready_ = false;
+ };

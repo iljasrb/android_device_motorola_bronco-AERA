@@ -1,0 +1,21 @@
+//
+// Copyright (C) 2026 The Android Open Source Project
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
+// The ROM's gralloc/mapper userspace (libgralloccore, loaded by the Adreno
+// platform subdriver) is built against a newer libc++ than this ramdisk ships
+// and references std::__1::__hash_memory, which Android 16's libc++ does not
+// export yet. Recovery links this shim so that symbol resolves.
+cc_library_shared {
+    name: "libaera_gpu_compat",
+    srcs: ["libcpp_hash_compat.cpp"],
+    recovery_available: true,
+    stl: "none",
+    cflags: [
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
+}

@@ -29,17 +29,6 @@ log() {
     echo "spss-start: $*" > /dev/kmsg 2>/dev/null
 }
 
-wait_for() {
-    # wait_for <path> [ticks of 0.1s]
-    i=0
-    limit=${2:-100}
-    while [ ! -e "$1" ] && [ "$i" -lt "$limit" ]; do
-        sleep 0.1
-        i=$((i + 1))
-    done
-    [ -e "$1" ]
-}
-
 slot=$(getprop ro.boot.slot_suffix 2>/dev/null)
 [ -n "$slot" ] || slot=_b
 
@@ -54,24 +43,25 @@ fix_node() {
     chmod "$4" "$1" 2>/dev/null
 }
 
-for node in /dev/qseecom /dev/qce /dev/smcinvoke /dev/qsee_ipc_irq_spss /dev/pft; do
-    wait_for "$node" 100
-    fix_node "$node" system drmrpc 0660
-done
-for node in /dev/spcom /dev/spss_utils /dev/sp_kernel /dev/sp_nvm /dev/sp_ssr \
-            /dev/sp_keymaster /dev/sp_keymaster_ssr /dev/cryptoapp \
-            /dev/spdaemon_ssr /dev/spu_hal_ssr; do
-    fix_node "$node" system system 0660
-done
-for node in /dev/adsprpc-smd; do
-    fix_node "$node" system system 0664
-done
-for node in /dev/adsprpc-smd-secure; do
-    fix_node "$node" system system 0644
-done
-for node in /dev/wlan; do
-    fix_node "$node" wifi wifi 0660
-done
+# Fix the node ownership after the SPSS is up. Do not wait for these nodes
+# before starting spdaemon: /dev/pft is absent on bronco and a bounded wait
+# here held the whole SPSS bring-up (and the decrypt page) for 10 seconds.
+# qseecomd owns /dev/qseecom and registers its listeners independently; the
+# kernel creates the SPU nodes when the SPSS attaches, and keymint/gatekeeper
+# start only after aera.spss.ready, so the ownership is in place before use.
+fix_nodes() {
+    for node in /dev/qseecom /dev/qce /dev/smcinvoke /dev/qsee_ipc_irq_spss /dev/pft; do
+        fix_node "$node" system drmrpc 0660
+    done
+    for node in /dev/spcom /dev/spss_utils /dev/sp_kernel /dev/sp_nvm /dev/sp_ssr \
+                /dev/sp_keymaster /dev/sp_keymaster_ssr /dev/cryptoapp \
+                /dev/spdaemon_ssr /dev/spu_hal_ssr; do
+        fix_node "$node" system system 0660
+    done
+    fix_node /dev/adsprpc-smd system system 0664
+    fix_node /dev/adsprpc-smd-secure system system 0644
+    fix_node /dev/wlan wifi wifi 0660
+}
 
 # qseecomd is started by init from on fs. Only fall back to starting it here if
 # it is missing; do not wait for its listeners, because that wait would delay
@@ -195,4 +185,5 @@ else
     log "SPSS 2nd phase not confirmed; continuing"
 fi
 
+fix_nodes
 setprop aera.spss.ready 1
